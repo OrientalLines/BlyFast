@@ -390,4 +390,161 @@ public class CommonMiddleware {
             default: return "application/octet-stream";
         }
     }
+
+    /**
+     * Creates a middleware that handles favicon requests efficiently.
+     * This middleware either ignores favicon requests or caches a favicon in memory
+     * to improve performance by skipping disk access on subsequent requests.
+     *
+     * @return the middleware
+     */
+    public static Middleware favicon() {
+        return favicon("/favicon.ico", null);
+    }
+
+    /**
+     * Creates a middleware that handles favicon requests efficiently with a custom file path.
+     * This middleware caches the favicon in memory to improve performance.
+     *
+     * @param filePath the path to the favicon file
+     * @return the middleware
+     */
+    public static Middleware favicon(String filePath) {
+        return favicon("/favicon.ico", filePath);
+    }
+
+    /**
+     * Configuration options for the favicon middleware.
+     */
+    public static class FaviconConfig {
+        private String url = "/favicon.ico";
+        private String file = "";
+        private byte[] data = null;
+        private String cacheControl = "public, max-age=31536000";
+
+        public String getUrl() {
+            return url;
+        }
+
+        public FaviconConfig setUrl(String url) {
+            this.url = url;
+            return this;
+        }
+
+        public String getFile() {
+            return file;
+        }
+
+        public FaviconConfig setFile(String file) {
+            this.file = file;
+            return this;
+        }
+
+        public byte[] getData() {
+            return data;
+        }
+
+        public FaviconConfig setData(byte[] data) {
+            this.data = data;
+            return this;
+        }
+
+        public String getCacheControl() {
+            return cacheControl;
+        }
+
+        public FaviconConfig setCacheControl(String cacheControl) {
+            this.cacheControl = cacheControl;
+            return this;
+        }
+    }
+
+    /**
+     * Creates a middleware that handles favicon requests efficiently with custom URL and file path.
+     * This middleware caches the favicon in memory to improve performance.
+     *
+     * @param url the URL to match for favicon requests
+     * @param filePath the path to the favicon file
+     * @return the middleware
+     */
+    public static Middleware favicon(String url, String filePath) {
+        // Cache the favicon bytes if a file path is provided
+        byte[] faviconBytes = null;
+        if (filePath != null && !filePath.isEmpty()) {
+            try {
+                faviconBytes = java.nio.file.Files.readAllBytes(new java.io.File(filePath).toPath());
+                logger.info("Favicon loaded and cached: {}", filePath);
+            } catch (Exception e) {
+                logger.warn("Could not read favicon file: {}. Favicon requests will be ignored.", filePath, e);
+            }
+        }
+
+        // Create a final reference to the favicon bytes for use in the lambda
+        final byte[] finalFaviconBytes = faviconBytes;
+        
+        return ctx -> {
+            // Check if this is a favicon request
+            if (!ctx.request().getPath().equals(url)) {
+                return true; // Not a favicon request, continue processing
+            }
+            
+            // If we have a favicon, serve it
+            if (finalFaviconBytes != null) {
+                ctx.type("image/x-icon");
+                ctx.header("Cache-Control", "public, max-age=31536000"); // Cache for 1 year
+                ctx.response().send(finalFaviconBytes);
+            } else {
+                // No favicon provided, return 204 No Content
+                ctx.status(204);
+            }
+            
+            return false; // Stop processing
+        };
+    }
+    
+    /**
+     * Creates a middleware that handles favicon requests efficiently with custom configuration.
+     * This middleware caches the favicon in memory to improve performance.
+     *
+     * @param config the configuration for the favicon middleware
+     * @return the middleware
+     */
+    public static Middleware favicon(FaviconConfig config) {
+        // Cache the favicon bytes if provided in config
+        byte[] faviconBytes = config.getData();
+        
+        // If no data is provided, try to load from file
+        if (faviconBytes == null && config.getFile() != null && !config.getFile().isEmpty()) {
+            try {
+                faviconBytes = java.nio.file.Files.readAllBytes(new java.io.File(config.getFile()).toPath());
+                logger.info("Favicon loaded and cached: {}", config.getFile());
+            } catch (Exception e) {
+                logger.warn("Could not read favicon file: {}. Favicon requests will be ignored.", config.getFile(), e);
+            }
+        }
+
+        // Create a final reference to the values for use in the lambda
+        final byte[] finalFaviconBytes = faviconBytes;
+        final String url = config.getUrl();
+        final String cacheControl = config.getCacheControl();
+        
+        return ctx -> {
+            // Check if this is a favicon request
+            if (!ctx.request().getPath().equals(url)) {
+                return true; // Not a favicon request, continue processing
+            }
+            
+            // If we have a favicon, serve it
+            if (finalFaviconBytes != null) {
+                ctx.type("image/x-icon");
+                ctx.header("Cache-Control", cacheControl);
+                ctx.response().send(finalFaviconBytes);
+            } else {
+                // No favicon provided, return 204 No Content
+                ctx.status(204);
+            }
+            
+            return false; // Stop processing
+        };
+    }
 }

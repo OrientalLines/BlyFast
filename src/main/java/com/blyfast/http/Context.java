@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.undertow.server.HttpServerExchange;
 
 import java.io.IOException;
+import java.util.Deque;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -72,6 +73,65 @@ public class Context {
      */
     public String query(String name) {
         return request.getQueryParam(name);
+    }
+
+    /**
+     * Gets all values for a query parameter by name.
+     *
+     * @param name the parameter name
+     * @return the list of parameter values or null if not present
+     */
+    public Deque<String> queryValues(String name) {
+        return request.getQueryParamValues(name);
+    }
+
+    /**
+     * Gets all query parameters.
+     *
+     * @return a map of parameter names to values
+     */
+    public Map<String, String> queryParams() {
+        return request.getQueryParams();
+    }
+
+    /**
+     * Gets a query parameter as an Integer.
+     *
+     * @param name the parameter name
+     * @return the parameter value as an Integer or null if not present or not a valid integer
+     */
+    public Integer queryAsInt(String name) {
+        return request.getQueryParamAsInt(name);
+    }
+
+    /**
+     * Gets a query parameter as a Long.
+     *
+     * @param name the parameter name
+     * @return the parameter value as a Long or null if not present or not a valid long
+     */
+    public Long queryAsLong(String name) {
+        return request.getQueryParamAsLong(name);
+    }
+
+    /**
+     * Gets a query parameter as a Double.
+     *
+     * @param name the parameter name
+     * @return the parameter value as a Double or null if not present or not a valid double
+     */
+    public Double queryAsDouble(String name) {
+        return request.getQueryParamAsDouble(name);
+    }
+
+    /**
+     * Gets a query parameter as a Boolean.
+     *
+     * @param name the parameter name
+     * @return the parameter value as a Boolean or null if not present or not a valid boolean
+     */
+    public Boolean queryAsBoolean(String name) {
+        return request.getQueryParamAsBoolean(name);
     }
 
     /**

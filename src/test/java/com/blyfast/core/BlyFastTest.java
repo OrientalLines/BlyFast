@@ -15,6 +15,9 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Deque;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -343,5 +346,122 @@ public class BlyFastTest {
         System.out.println("    Tasks completed: " + app.getThreadPool().getTasksCompleted());
         System.out.println("    Average execution time: " +
                 (app.getThreadPool().getAverageExecutionTime() / 1_000_000.0) + " ms");
+    }
+
+    @Test
+    public void testQueryParameters() throws Exception {
+        // Define a route that returns query parameters
+        app.get("/query-test", ctx -> {
+            Map<String, Object> result = new HashMap<>();
+            
+            // Basic query parameter
+            result.put("name", ctx.query("name"));
+            
+            // Type conversion
+            result.put("page", ctx.queryAsInt("page"));
+            result.put("id", ctx.queryAsLong("id"));
+            result.put("price", ctx.queryAsDouble("price"));
+            result.put("active", ctx.queryAsBoolean("active"));
+            
+            // Missing parameters with null results
+            result.put("missing", ctx.query("missing"));
+            result.put("missingInt", ctx.queryAsInt("missingInt"));
+            
+            // Invalid type conversions
+            result.put("invalidInt", ctx.queryAsInt("invalidInt"));
+            
+            // Get all query parameters
+            result.put("allParams", ctx.queryParams());
+            
+            // Multi-value parameter - return the first and count
+            Deque<String> tags = ctx.queryValues("tag");
+            result.put("firstTag", tags != null ? tags.getFirst() : null);
+            result.put("tagCount", tags != null ? tags.size() : 0);
+            
+            ctx.json(result);
+        });
+
+        // Start the server
+        app.port(TEST_PORT).listen();
+
+        // Test basic query parameter and type conversions
+        HttpRequest request1 = HttpRequest.newBuilder()
+                .uri(URI.create("http://localhost:" + TEST_PORT + 
+                     "/query-test?name=test&page=5&id=123456789&price=19.99&active=true&invalidInt=not-a-number"))
+                .GET()
+                .build();
+
+        HttpResponse<String> response1 = httpClient.send(request1, HttpResponse.BodyHandlers.ofString());
+        
+        // Verify the response
+        assertEquals(200, response1.statusCode());
+        String body1 = response1.body();
+        assertTrue(body1.contains("\"name\":\"test\""));
+        assertTrue(body1.contains("\"page\":5"));
+        assertTrue(body1.contains("\"id\":123456789"));
+        assertTrue(body1.contains("\"price\":19.99"));
+        assertTrue(body1.contains("\"active\":true"));
+        assertTrue(body1.contains("\"missing\":null"));
+        assertTrue(body1.contains("\"missingInt\":null"));
+        assertTrue(body1.contains("\"invalidInt\":null"));
+
+        // Test multi-value parameters
+        HttpRequest request2 = HttpRequest.newBuilder()
+                .uri(URI.create("http://localhost:" + TEST_PORT + 
+                     "/query-test?tag=java&tag=framework&tag=http"))
+                .GET()
+                .build();
+
+        HttpResponse<String> response2 = httpClient.send(request2, HttpResponse.BodyHandlers.ofString());
+        
+        // Verify the response
+        assertEquals(200, response2.statusCode());
+        String body2 = response2.body();
+        assertTrue(body2.contains("\"firstTag\":\"java\""));
+        assertTrue(body2.contains("\"tagCount\":3"));
+
+        // Test boolean conversions with various values
+        HttpRequest request3 = HttpRequest.newBuilder()
+                .uri(URI.create("http://localhost:" + TEST_PORT + 
+                     "/query-test?active1=yes&active2=1&active3=on&inactive1=no&inactive2=0&inactive3=off"))
+                .GET()
+                .build();
+
+        HttpResponse<String> response3 = httpClient.send(request3, HttpResponse.BodyHandlers.ofString());
+        
+        // The boolean values will be processed by the queryParams method which will return a map
+        assertEquals(200, response3.statusCode());
+        String body3 = response3.body();
+        
+        // Test individual boolean value
+        app.get("/boolean-test", ctx -> {
+            Map<String, Object> result = new HashMap<>();
+            result.put("active1", ctx.queryAsBoolean("active1"));
+            result.put("active2", ctx.queryAsBoolean("active2"));
+            result.put("active3", ctx.queryAsBoolean("active3"));
+            result.put("inactive1", ctx.queryAsBoolean("inactive1"));
+            result.put("inactive2", ctx.queryAsBoolean("inactive2"));
+            result.put("inactive3", ctx.queryAsBoolean("inactive3"));
+            result.put("invalid", ctx.queryAsBoolean("invalid"));
+            ctx.json(result);
+        });
+        
+        HttpRequest booleanRequest = HttpRequest.newBuilder()
+                .uri(URI.create("http://localhost:" + TEST_PORT + 
+                     "/boolean-test?active1=yes&active2=1&active3=on&inactive1=no&inactive2=0&inactive3=off&invalid=maybe"))
+                .GET()
+                .build();
+
+        HttpResponse<String> booleanResponse = httpClient.send(booleanRequest, HttpResponse.BodyHandlers.ofString());
+        
+        assertEquals(200, booleanResponse.statusCode());
+        String booleanBody = booleanResponse.body();
+        assertTrue(booleanBody.contains("\"active1\":true"));
+        assertTrue(booleanBody.contains("\"active2\":true"));
+        assertTrue(booleanBody.contains("\"active3\":true"));
+        assertTrue(booleanBody.contains("\"inactive1\":false"));
+        assertTrue(booleanBody.contains("\"inactive2\":false"));
+        assertTrue(booleanBody.contains("\"inactive3\":false"));
+        assertTrue(booleanBody.contains("\"invalid\":null"));
     }
 }

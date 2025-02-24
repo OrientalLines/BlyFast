@@ -65,6 +65,93 @@ public class Request {
     }
 
     /**
+     * Gets all values for a query parameter by name.
+     *
+     * @param name the parameter name
+     * @return the list of parameter values or null if not present
+     */
+    public Deque<String> getQueryParamValues(String name) {
+        return exchange.getQueryParameters().get(name);
+    }
+
+    /**
+     * Gets a query parameter as an Integer.
+     *
+     * @param name the parameter name
+     * @return the parameter value as an Integer or null if not present or not a valid integer
+     */
+    public Integer getQueryParamAsInt(String name) {
+        String value = getQueryParam(name);
+        if (value == null) {
+            return null;
+        }
+        try {
+            return Integer.parseInt(value);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Gets a query parameter as a Long.
+     *
+     * @param name the parameter name
+     * @return the parameter value as a Long or null if not present or not a valid long
+     */
+    public Long getQueryParamAsLong(String name) {
+        String value = getQueryParam(name);
+        if (value == null) {
+            return null;
+        }
+        try {
+            return Long.parseLong(value);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Gets a query parameter as a Double.
+     *
+     * @param name the parameter name
+     * @return the parameter value as a Double or null if not present or not a valid double
+     */
+    public Double getQueryParamAsDouble(String name) {
+        String value = getQueryParam(name);
+        if (value == null) {
+            return null;
+        }
+        try {
+            return Double.parseDouble(value);
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    /**
+     * Gets a query parameter as a Boolean.
+     * Returns true for "true", "yes", "1", "on" (case insensitive),
+     * false for "false", "no", "0", "off" (case insensitive),
+     * and null for other values or if the parameter is not present.
+     *
+     * @param name the parameter name
+     * @return the parameter value as a Boolean or null if not present or not a valid boolean
+     */
+    public Boolean getQueryParamAsBoolean(String name) {
+        String value = getQueryParam(name);
+        if (value == null) {
+            return null;
+        }
+        value = value.toLowerCase();
+        if (value.equals("true") || value.equals("yes") || value.equals("1") || value.equals("on")) {
+            return true;
+        } else if (value.equals("false") || value.equals("no") || value.equals("0") || value.equals("off")) {
+            return false;
+        }
+        return null;
+    }
+
+    /**
      * Gets all query parameters.
      *
      * @return a map of parameter names to values
