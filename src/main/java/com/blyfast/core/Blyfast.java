@@ -7,6 +7,9 @@ import com.blyfast.middleware.Middleware;
 import com.blyfast.plugin.Plugin;
 import com.blyfast.routing.Route;
 import com.blyfast.routing.Router;
+import com.blyfast.util.Banner;
+import com.blyfast.util.ConsoleColors;
+import com.blyfast.util.LogUtil;
 import io.undertow.Undertow;
 import io.undertow.server.HttpHandler;
 import io.undertow.server.HttpServerExchange;
@@ -104,7 +107,7 @@ public class Blyfast {
      * @return this instance for method chaining
      */
     public Blyfast register(Plugin plugin) {
-        logger.info("Registering plugin: {}", plugin.getName());
+        logger.info(LogUtil.info("Registering plugin: " + ConsoleColors.CYAN_BOLD + plugin.getName() + ConsoleColors.RESET));
         plugins.add(plugin);
         plugin.register(this);
         return this;
@@ -253,7 +256,10 @@ public class Blyfast {
      * Starts the server and begins listening for requests.
      */
     public void listen() {
-        listen(() -> logger.info("Blyfast server started on {}:{}", host, port));
+        listen(() -> {
+            // Display a stylish banner with server information
+            Banner.display(host, port);
+        });
     }
 
     /**
@@ -264,6 +270,7 @@ public class Blyfast {
     public void listen(Runnable callback) {
         // Notify plugins that the server is starting
         for (Plugin plugin : plugins) {
+            logger.info(LogUtil.info("Starting plugin: " + ConsoleColors.CYAN_BOLD + plugin.getName() + ConsoleColors.RESET));
             plugin.onStart(this);
         }
 
@@ -288,6 +295,7 @@ public class Blyfast {
         if (server != null) {
             // Notify plugins that the server is stopping
             for (Plugin plugin : plugins) {
+                logger.info(LogUtil.info("Stopping plugin: " + ConsoleColors.CYAN_BOLD + plugin.getName() + ConsoleColors.RESET));
                 plugin.onStop(this);
             }
 
@@ -306,7 +314,7 @@ public class Blyfast {
                 Thread.currentThread().interrupt();
             }
 
-            logger.info("Blyfast server stopped");
+            logger.info(LogUtil.info(ConsoleColors.YELLOW_BOLD + "Blyfast server stopped" + ConsoleColors.RESET));
         }
     }
 
@@ -337,13 +345,13 @@ public class Blyfast {
                     exchange.endExchange();
                 }
             } catch (Exception e) {
-                logger.error("Error processing request", e);
+                logger.error(LogUtil.error("Error processing request: " + e.getMessage()), e);
                 try {
                     exchange.setStatusCode(500);
                     exchange.getResponseSender().send("{\"error\": \"Internal Server Error\"}");
                     exchange.endExchange();
                 } catch (Exception ex) {
-                    logger.error("Error sending error response", ex);
+                    logger.error(LogUtil.error("Error sending error response: " + ex.getMessage()), ex);
                 }
             }
         }
@@ -366,7 +374,7 @@ public class Blyfast {
                     try {
                         continueProcessing = middleware.handle(context);
                     } catch (Exception e) {
-                        logger.error("Error in middleware", e);
+                        logger.error(LogUtil.error("Error in middleware: " + e.getMessage()), e);
                         response.status(500).json("{\"error\": \"Internal Server Error\"}");
                         return; // Exit early on error
                     }
@@ -383,11 +391,12 @@ public class Blyfast {
                 Route route = router.findRoute(method, path);
                 if (route != null) {
                     // Extract path parameters - debug logging
-                    logger.debug("Found route: {} {}, pattern: {}", method, path, route.getPattern());
+                    logger.debug(LogUtil.debug("Found route: " + ConsoleColors.BLUE_BOLD + method + " " + path + ConsoleColors.RESET + 
+                                      ", pattern: " + ConsoleColors.CYAN + route.getPattern() + ConsoleColors.RESET));
                     router.resolveParams(request, route);
 
                     // Debug log the extracted parameters
-                    logger.debug("Path parameters: {}", request.getPathParams());
+                    logger.debug(LogUtil.debug("Path parameters: " + ConsoleColors.CYAN + request.getPathParams() + ConsoleColors.RESET));
 
                     // Process route-specific middleware
                     for (Middleware middleware : route.getMiddleware()) {
@@ -395,7 +404,7 @@ public class Blyfast {
                         try {
                             continueProcessing = middleware.handle(context);
                         } catch (Exception e) {
-                            logger.error("Error in route middleware", e);
+                            logger.error(LogUtil.error("Error in route middleware: " + e.getMessage()), e);
                             response.status(500).json("{\"error\": \"Internal Server Error\"}");
                             return; // Exit early on error
                         }
@@ -409,7 +418,7 @@ public class Blyfast {
                     try {
                         route.getHandler().handle(context);
                     } catch (Exception e) {
-                        logger.error("Error in route handler", e);
+                        logger.error(LogUtil.error("Error in route handler: " + e.getMessage()), e);
                         if (!response.isSent()) {
                             response.status(500).json("{\"error\": \"Internal Server Error\"}");
                         }
@@ -419,7 +428,7 @@ public class Blyfast {
                     response.status(404).json("{\"error\": \"Not Found\"}");
                 }
             } catch (Exception e) {
-                logger.error("Unhandled error in request processing", e);
+                logger.error(LogUtil.error("Unhandled error in request processing: " + e.getMessage()), e);
                 if (!exchange.isResponseStarted()) {
                     exchange.setStatusCode(500);
                     exchange.getResponseSender().send("{\"error\": \"Internal Server Error\"}");

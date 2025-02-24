@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <!-- Console appender -->
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} %highlight(%level) %magenta([%thread]) %cyan(%logger{36}) - %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Application logs -->
+    <logger name="com.blyfast" level="INFO" />
+    
+    <!-- Third-party libraries - set to WARN or higher to reduce noise -->
+    <logger name="io.undertow" level="WARN" />
+    <logger name="org.xnio" level="WARN" />
+    <logger name="org.jboss" level="WARN" />
+    
+    <!-- Root logger - set to WARN to reduce overall noise -->
+    <root level="WARN">
+        <appender-ref ref="CONSOLE" />
+    </root>
+</configuration> 
