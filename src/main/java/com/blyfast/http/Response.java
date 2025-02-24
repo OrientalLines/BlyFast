@@ -2,7 +2,6 @@ package com.blyfast.http;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.undertow.io.Sender;
 import io.undertow.server.HttpServerExchange;
 import io.undertow.util.Headers;
 import io.undertow.util.HttpString;
@@ -299,15 +298,6 @@ public class Response {
         error.put("message", message);
 
         return status(status).json(error);
-    }
-
-    /**
-     * Gets the underlying sender object.
-     *
-     * @return the sender
-     */
-    private Sender sender() {
-        return exchange.getResponseSender();
     }
 
     /**
