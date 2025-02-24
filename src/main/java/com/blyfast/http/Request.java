@@ -107,17 +107,13 @@ public class Request {
      */
     public String getBody() throws IOException {
         if (body == null) {
-            if (exchange.isBlocking()) {
-                try (BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(exchange.getInputStream(), StandardCharsets.UTF_8))) {
-                    body = reader.lines().collect(Collectors.joining());
-                }
-            } else {
+            if (!exchange.isBlocking()) {
                 exchange.startBlocking();
-                try (BufferedReader reader = new BufferedReader(
-                        new InputStreamReader(exchange.getInputStream(), StandardCharsets.UTF_8))) {
-                    body = reader.lines().collect(Collectors.joining());
-                }
+            }
+            
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(exchange.getInputStream(), StandardCharsets.UTF_8))) {
+                body = reader.lines().collect(Collectors.joining());
             }
         }
         return body;

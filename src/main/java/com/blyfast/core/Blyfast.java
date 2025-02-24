@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 
 /**
  * The main application class for the Blyfast framework.
@@ -32,6 +33,7 @@ public class Blyfast {
     private Undertow server;
     private String host = "0.0.0.0";
     private int port = 8080;
+    private ThreadPool threadPool;
     
     /**
      * Creates a new Blyfast application instance.
@@ -41,6 +43,24 @@ public class Blyfast {
         this.globalMiddleware = new ArrayList<>();
         this.plugins = new ArrayList<>();
         this.locals = new HashMap<>();
+        
+        // Initialize the thread pool with default configuration
+        this.threadPool = new ThreadPool();
+    }
+    
+    /**
+     * Creates a new Blyfast application instance with a custom thread pool configuration.
+     * 
+     * @param threadPoolConfig the thread pool configuration
+     */
+    public Blyfast(ThreadPool.ThreadPoolConfig threadPoolConfig) {
+        this.router = new Router();
+        this.globalMiddleware = new ArrayList<>();
+        this.plugins = new ArrayList<>();
+        this.locals = new HashMap<>();
+        
+        // Initialize the thread pool with custom configuration
+        this.threadPool = new ThreadPool(threadPoolConfig);
     }
     
     /**
@@ -209,6 +229,26 @@ public class Blyfast {
     }
     
     /**
+     * Gets the thread pool used by this application.
+     * 
+     * @return the thread pool
+     */
+    public ThreadPool getThreadPool() {
+        return threadPool;
+    }
+    
+    /**
+     * Sets the thread pool for this application.
+     * 
+     * @param threadPool the thread pool to use
+     * @return this instance for method chaining
+     */
+    public Blyfast threadPool(ThreadPool threadPool) {
+        this.threadPool = threadPool;
+        return this;
+    }
+    
+    /**
      * Starts the server and begins listening for requests.
      */
     public void listen() {
@@ -230,6 +270,7 @@ public class Blyfast {
         server = Undertow.builder()
                 .addHttpListener(port, host)
                 .setHandler(handler)
+                .setWorkerThreads(threadPool.getConfig().getMaxPoolSize()) // Set Undertow worker threads to match our thread pool
                 .build();
                 
         server.start();
@@ -249,6 +290,20 @@ public class Blyfast {
             }
             
             server.stop();
+            
+            // Shutdown the thread pool
+            threadPool.shutdown();
+            try {
+                // Wait for tasks to complete
+                if (!threadPool.awaitTermination(30, TimeUnit.SECONDS)) {
+                    // Force shutdown if tasks don't complete in time
+                    threadPool.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                threadPool.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+            
             logger.info("Blyfast server stopped");
         }
     }
@@ -260,41 +315,113 @@ public class Blyfast {
         @Override
         public void handleRequest(HttpServerExchange exchange) throws Exception {
             if (exchange.isInIoThread()) {
+                // Dispatch to worker thread
                 exchange.dispatch(this);
                 return;
             }
             
-            Request request = new Request(exchange);
-            Response response = new Response(exchange);
-            Context context = new Context(request, response);
-            
-            // Process middleware first
-            for (Middleware middleware : globalMiddleware) {
-                boolean continueProcessing = middleware.handle(context);
-                if (!continueProcessing) {
-                    return; // Middleware chain was interrupted
+            // We're now in a worker thread
+            try {
+                // Make sure the exchange is blocking for body reading
+                if (!exchange.isBlocking()) {
+                    exchange.startBlocking();
+                }
+                
+                // Process the request directly, not in a separate thread
+                processRequest(exchange);
+                
+                // Ensure the exchange is completed
+                if (!exchange.isComplete()) {
+                    exchange.endExchange();
+                }
+            } catch (Exception e) {
+                logger.error("Error processing request", e);
+                try {
+                    exchange.setStatusCode(500);
+                    exchange.getResponseSender().send("{\"error\": \"Internal Server Error\"}");
+                    exchange.endExchange();
+                } catch (Exception ex) {
+                    logger.error("Error sending error response", ex);
                 }
             }
-            
-            // Process the route
-            Route route = router.findRoute(request.getMethod(), request.getPath());
-            if (route != null) {
-                // Extract path parameters
-                router.resolveParams(request, route);
-                
-                // Process route-specific middleware
-                for (Middleware middleware : route.getMiddleware()) {
-                    boolean continueProcessing = middleware.handle(context);
-                    if (!continueProcessing) {
-                        return; // Middleware chain was interrupted
+        }
+        
+        /**
+         * Processes a request using the middleware and router.
+         * 
+         * @param exchange the HTTP exchange
+         */
+        private void processRequest(HttpServerExchange exchange) {
+            try {
+                // Create request and response objects
+                Request request = new Request(exchange);
+                Response response = new Response(exchange);
+                Context context = new Context(request, response);
+
+                // Process global middleware
+                for (Middleware middleware : globalMiddleware) {
+                    boolean continueProcessing;
+                    try {
+                        continueProcessing = middleware.handle(context);
+                    } catch (Exception e) {
+                        logger.error("Error in middleware", e);
+                        response.status(500).json("{\"error\": \"Internal Server Error\"}");
+                        return; // Exit early on error
+                    }
+                    
+                    if (!continueProcessing || response.isSent()) {
+                        return; // Middleware chain was interrupted or response was sent
                     }
                 }
                 
-                // Execute the route handler
-                route.getHandler().handle(context);
-            } else {
-                // No route found - send 404
-                response.status(404).json("{\"error\": \"Not Found\"}");
+                // Process the route
+                String method = request.getMethod();
+                String path = request.getPath();
+                
+                Route route = router.findRoute(method, path);
+                if (route != null) {
+                    // Extract path parameters - debug logging
+                    logger.debug("Found route: {} {}, pattern: {}", method, path, route.getPattern());
+                    router.resolveParams(request, route);
+                    
+                    // Debug log the extracted parameters
+                    logger.debug("Path parameters: {}", request.getPathParams());
+                    
+                    // Process route-specific middleware
+                    for (Middleware middleware : route.getMiddleware()) {
+                        boolean continueProcessing;
+                        try {
+                            continueProcessing = middleware.handle(context);
+                        } catch (Exception e) {
+                            logger.error("Error in route middleware", e);
+                            response.status(500).json("{\"error\": \"Internal Server Error\"}");
+                            return; // Exit early on error
+                        }
+                        
+                        if (!continueProcessing || response.isSent()) {
+                            return; // Middleware chain was interrupted or response was sent
+                        }
+                    }
+                    
+                    // Execute the route handler
+                    try {
+                        route.getHandler().handle(context);
+                    } catch (Exception e) {
+                        logger.error("Error in route handler", e);
+                        if (!response.isSent()) {
+                            response.status(500).json("{\"error\": \"Internal Server Error\"}");
+                        }
+                    }
+                } else {
+                    // No route found - return 404
+                    response.status(404).json("{\"error\": \"Not Found\"}");
+                }
+            } catch (Exception e) {
+                logger.error("Unhandled error in request processing", e);
+                if (!exchange.isResponseStarted()) {
+                    exchange.setStatusCode(500);
+                    exchange.getResponseSender().send("{\"error\": \"Internal Server Error\"}");
+                }
             }
         }
     }

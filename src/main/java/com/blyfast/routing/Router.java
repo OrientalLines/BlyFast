@@ -111,7 +111,12 @@ public class Router {
             for (int i = 0; i < paramNames.size(); i++) {
                 // Groups are 1-indexed, with group 0 being the entire match
                 String value = matcher.group(i + 1);
-                request.setPathParam(paramNames.get(i), value);
+                if (value != null) {
+                    String paramName = paramNames.get(i);
+                    request.setPathParam(paramName, value);
+                    // Add debug logging
+                    System.out.println("Path parameter extracted: " + paramName + " = " + value);
+                }
             }
         }
     }
