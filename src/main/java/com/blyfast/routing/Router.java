@@ -4,20 +4,32 @@ import com.blyfast.core.Blyfast;
 import com.blyfast.http.Request;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 
 /**
  * Manages routes and matches incoming requests to the appropriate handler.
+ * Optimized for high-performance route matching.
  */
 public class Router {
-    private final List<Route> routes;
+    // Store routes by HTTP method for faster lookups (case-insensitive)
+    private final Map<String, List<Route>> routesByMethod;
+    
+    // Static routes by exact path match
+    private final Map<String, Map<String, Route>> staticRoutes;
+    
+    // All routes for introspection
+    private final List<Route> allRoutes;
 
     /**
      * Creates a new Router instance.
      */
     public Router() {
-        this.routes = new ArrayList<>();
+        this.routesByMethod = new HashMap<>();
+        this.staticRoutes = new HashMap<>();
+        this.allRoutes = new ArrayList<>();
     }
 
     /**
@@ -29,8 +41,21 @@ public class Router {
      * @return the created route for further customization
      */
     public Route addRoute(String method, String path, Blyfast.Handler handler) {
+        // Keep original method case for the Route object
         Route route = new Route(method, path, handler);
-        routes.add(route);
+        
+        // Add to the all-routes list
+        allRoutes.add(route);
+        
+        // Add to the method-specific list (case-insensitive key)
+        String methodKey = method.toUpperCase();
+        routesByMethod.computeIfAbsent(methodKey, k -> new ArrayList<>()).add(route);
+        
+        // If it's a static route (no parameters), add to static routes map for O(1) lookup
+        if (!path.contains(":") && !path.contains("*")) {
+            staticRoutes.computeIfAbsent(methodKey, k -> new HashMap<>()).put(path, route);
+        }
+        
         return route;
     }
 
@@ -80,17 +105,35 @@ public class Router {
 
     /**
      * Finds a route that matches the given method and path.
+     * Optimized for performance with O(1) lookups for static routes.
      *
      * @param method the HTTP method
      * @param path   the request path
      * @return the matching route or null if none matches
      */
     public Route findRoute(String method, String path) {
-        for (Route route : routes) {
-            if (route.matches(method, path)) {
-                return route;
+        String methodKey = method.toUpperCase();
+        
+        // First, try exact match for static routes (O(1) lookup)
+        Map<String, Route> methodStaticRoutes = staticRoutes.get(methodKey);
+        if (methodStaticRoutes != null) {
+            Route staticRoute = methodStaticRoutes.get(path);
+            if (staticRoute != null) {
+                return staticRoute;
             }
         }
+        
+        // If no static route match, check dynamic routes
+        List<Route> methodRoutes = routesByMethod.get(methodKey);
+        if (methodRoutes != null) {
+            for (Route route : methodRoutes) {
+                // Use Route's matches method which handles case-insensitive method comparison
+                if (route.matches(method, path)) {
+                    return route;
+                }
+            }
+        }
+        
         return null;
     }
 
@@ -114,8 +157,6 @@ public class Router {
                 if (value != null) {
                     String paramName = paramNames.get(i);
                     request.setPathParam(paramName, value);
-                    // Add debug logging
-                    System.out.println("Path parameter extracted: " + paramName + " = " + value);
                 }
             }
         }
@@ -127,6 +168,6 @@ public class Router {
      * @return the list of routes
      */
     public List<Route> getRoutes() {
-        return new ArrayList<>(routes);
+        return new ArrayList<>(allRoutes);
     }
 }

@@ -13,8 +13,8 @@ import java.util.Map;
  * Provides convenient access to both the request and response objects.
  */
 public class Context {
-    private final Request request;
-    private final Response response;
+    private Request request;
+    private Response response;
     private final Map<String, Object> locals = new HashMap<>();
 
     /**
@@ -287,6 +287,21 @@ public class Context {
      */
     public Context redirect(String url) {
         response.redirect(url);
+        return this;
+    }
+
+    /**
+     * Resets this context instance for reuse with new request and response objects.
+     * Used for object pooling to minimize garbage collection.
+     *
+     * @param request the new request object
+     * @param response the new response object
+     * @return this instance for method chaining
+     */
+    public Context reset(Request request, Response response) {
+        this.request = request;
+        this.response = response;
+        this.locals.clear();
         return this;
     }
 }

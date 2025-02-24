@@ -27,7 +27,7 @@ public class Route {
      * @param handler the handler function
      */
     public Route(String method, String path, Blyfast.Handler handler) {
-        this.method = method;
+        this.method = method.toUpperCase(); // Always store methods in uppercase for consistency
         this.path = path;
         this.handler = handler;
         this.middleware = new ArrayList<>();
@@ -94,7 +94,8 @@ public class Route {
      * @return true if the route matches
      */
     public boolean matches(String method, String path) {
-        if (!this.method.equalsIgnoreCase(method)) {
+        // Always do case-insensitive method comparison
+        if (!this.method.equalsIgnoreCase(method.toUpperCase())) {
             return false;
         }
 

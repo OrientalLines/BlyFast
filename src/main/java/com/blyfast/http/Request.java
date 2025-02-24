@@ -5,26 +5,38 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.undertow.server.HttpServerExchange;
 import io.undertow.util.HeaderMap;
 import io.undertow.util.HeaderValues;
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
+import java.nio.ByteBuffer;
+import java.nio.channels.Channels;
+import java.nio.channels.ReadableByteChannel;
 import java.nio.charset.StandardCharsets;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.stream.Collectors;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Wrapper for HTTP request data that provides a convenient API.
  */
 public class Request {
+    // Shared ObjectMapper instance configured for performance
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    
+    // Cache for deserialization of frequently used types
+    private static final ConcurrentHashMap<Class<?>, Boolean> deserializationConfigured = new ConcurrentHashMap<>();
 
-    private final HttpServerExchange exchange;
+    // Buffer size for reading request bodies
+    private static final int BUFFER_SIZE = 8192;
+    
+    // Reusable ByteBuffer for reading request bodies
+    private static final ThreadLocal<ByteBuffer> bufferPool = ThreadLocal.withInitial(() -> ByteBuffer.allocateDirect(BUFFER_SIZE));
+
+    private HttpServerExchange exchange;
     private String body;
     private JsonNode jsonBody;
     private final Map<String, Object> attributes = new HashMap<>();
     private final Map<String, String> pathParams = new HashMap<>();
+    private final Map<String, Object> parsedObjects = new HashMap<>();
 
     /**
      * Creates a new Request instance wrapped around an HttpServerExchange.
@@ -188,6 +200,7 @@ public class Request {
 
     /**
      * Gets the raw request body as a string.
+     * Uses lazy loading, caching, and optimized I/O for better performance.
      *
      * @return the request body
      * @throws IOException if an I/O error occurs
@@ -198,9 +211,19 @@ public class Request {
                 exchange.startBlocking();
             }
 
-            try (BufferedReader reader = new BufferedReader(
-                    new InputStreamReader(exchange.getInputStream(), StandardCharsets.UTF_8))) {
-                body = reader.lines().collect(Collectors.joining());
+            ByteBuffer buffer = bufferPool.get();
+            buffer.clear();
+            
+            try (ReadableByteChannel channel = Channels.newChannel(exchange.getInputStream())) {
+                StringBuilder bodyBuilder = new StringBuilder();
+                while (channel.read(buffer) != -1) {
+                    buffer.flip();
+                    byte[] bytes = new byte[buffer.remaining()];
+                    buffer.get(bytes);
+                    bodyBuilder.append(new String(bytes, StandardCharsets.UTF_8));
+                    buffer.clear();
+                }
+                body = bodyBuilder.toString();
             }
         }
         return body;
@@ -208,6 +231,7 @@ public class Request {
 
     /**
      * Gets the request body parsed as JSON.
+     * Uses caching for better performance.
      *
      * @return the JSON body
      * @throws IOException if an I/O error occurs
@@ -221,14 +245,31 @@ public class Request {
 
     /**
      * Deserializes the request body into an object of the specified type.
+     * Uses caching for frequently parsed classes.
      *
      * @param clazz the class of the object to deserialize into
      * @param <T>   the type of the object
      * @return the deserialized object
      * @throws IOException if an I/O error occurs
      */
+    @SuppressWarnings("unchecked")
     public <T> T parseBody(Class<T> clazz) throws IOException {
-        return MAPPER.readValue(getBody(), clazz);
+        // Check if we've already parsed this body into this class
+        Object cached = parsedObjects.get(clazz.getName());
+        if (cached != null && clazz.isInstance(cached)) {
+            return (T) cached;
+        }
+        
+        // Configure deserialization for this class only once
+        deserializationConfigured.computeIfAbsent(clazz, k -> {
+            // This block runs only once per class during the application's lifecycle
+            MAPPER.findAndRegisterModules(); // Optional: find modules in the classpath 
+            return true;
+        });
+        
+        T result = MAPPER.readValue(getBody(), clazz);
+        parsedObjects.put(clazz.getName(), result);
+        return result;
     }
 
     /**
@@ -287,5 +328,32 @@ public class Request {
      */
     public HttpServerExchange getExchange() {
         return exchange;
+    }
+
+    /**
+     * Resets this request instance for reuse with a new exchange.
+     * Used for object pooling to minimize garbage collection.
+     *
+     * @param exchange the new exchange to use
+     * @return this instance for method chaining
+     */
+    public Request reset(HttpServerExchange exchange) {
+        this.exchange = exchange;
+        this.body = null;
+        this.jsonBody = null;
+        this.attributes.clear();
+        this.pathParams.clear();
+        this.parsedObjects.clear();
+        return this;
+    }
+
+    /**
+     * Gets the shared ObjectMapper instance.
+     * This allows other classes to use the same configured instance.
+     * 
+     * @return the shared ObjectMapper instance
+     */
+    public static ObjectMapper getObjectMapper() {
+        return MAPPER;
     }
 }

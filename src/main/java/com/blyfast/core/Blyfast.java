@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -28,6 +29,12 @@ import java.util.concurrent.TimeUnit;
  */
 public class Blyfast {
     private static final Logger logger = LoggerFactory.getLogger(Blyfast.class);
+    
+    // Object pool configuration
+    private static final int DEFAULT_POOL_SIZE = 1000;
+    private final ArrayBlockingQueue<Request> requestPool;
+    private final ArrayBlockingQueue<Response> responsePool;
+    private final ArrayBlockingQueue<Context> contextPool;
 
     private final Router router;
     private final List<Middleware> globalMiddleware;
@@ -37,15 +44,38 @@ public class Blyfast {
     private String host = "0.0.0.0";
     private int port = 8080;
     private ThreadPool threadPool;
+    
+    private final boolean useObjectPooling;
 
     /**
      * Creates a new Blyfast application instance.
      */
     public Blyfast() {
+        this(true); // Enable object pooling by default
+    }
+    
+    /**
+     * Creates a new Blyfast application instance with option to enable/disable object pooling.
+     * 
+     * @param useObjectPooling whether to use object pooling for better performance
+     */
+    public Blyfast(boolean useObjectPooling) {
         this.router = new Router();
         this.globalMiddleware = new ArrayList<>();
         this.plugins = new ArrayList<>();
         this.locals = new HashMap<>();
+        this.useObjectPooling = useObjectPooling;
+
+        // Initialize object pools if enabled
+        if (useObjectPooling) {
+            this.requestPool = new ArrayBlockingQueue<>(DEFAULT_POOL_SIZE);
+            this.responsePool = new ArrayBlockingQueue<>(DEFAULT_POOL_SIZE);
+            this.contextPool = new ArrayBlockingQueue<>(DEFAULT_POOL_SIZE);
+        } else {
+            this.requestPool = null;
+            this.responsePool = null;
+            this.contextPool = null;
+        }
 
         // Initialize the thread pool with default configuration
         this.threadPool = new ThreadPool();
@@ -58,10 +88,33 @@ public class Blyfast {
      * @param threadPoolConfig the thread pool configuration
      */
     public Blyfast(ThreadPool.ThreadPoolConfig threadPoolConfig) {
+        this(threadPoolConfig, true);
+    }
+    
+    /**
+     * Creates a new Blyfast application instance with a custom thread pool
+     * configuration and option to enable/disable object pooling.
+     * 
+     * @param threadPoolConfig the thread pool configuration
+     * @param useObjectPooling whether to use object pooling for better performance
+     */
+    public Blyfast(ThreadPool.ThreadPoolConfig threadPoolConfig, boolean useObjectPooling) {
         this.router = new Router();
         this.globalMiddleware = new ArrayList<>();
         this.plugins = new ArrayList<>();
         this.locals = new HashMap<>();
+        this.useObjectPooling = useObjectPooling;
+
+        // Initialize object pools if enabled
+        if (useObjectPooling) {
+            this.requestPool = new ArrayBlockingQueue<>(DEFAULT_POOL_SIZE);
+            this.responsePool = new ArrayBlockingQueue<>(DEFAULT_POOL_SIZE);
+            this.contextPool = new ArrayBlockingQueue<>(DEFAULT_POOL_SIZE);
+        } else {
+            this.requestPool = null;
+            this.responsePool = null;
+            this.contextPool = null;
+        }
 
         // Initialize the thread pool with custom configuration
         this.threadPool = new ThreadPool(threadPoolConfig);
@@ -319,6 +372,82 @@ public class Blyfast {
     }
 
     /**
+     * Gets a Request object from the pool or creates a new one if the pool is empty.
+     * 
+     * @param exchange the HTTP exchange
+     * @return a Request object
+     */
+    private Request getRequest(HttpServerExchange exchange) {
+        if (!useObjectPooling) {
+            return new Request(exchange);
+        }
+        
+        Request request = requestPool.poll();
+        if (request == null) {
+            return new Request(exchange);
+        }
+        request.reset(exchange);
+        return request;
+    }
+    
+    /**
+     * Gets a Response object from the pool or creates a new one if the pool is empty.
+     * 
+     * @param exchange the HTTP exchange
+     * @return a Response object
+     */
+    private Response getResponse(HttpServerExchange exchange) {
+        if (!useObjectPooling) {
+            return new Response(exchange);
+        }
+        
+        Response response = responsePool.poll();
+        if (response == null) {
+            return new Response(exchange);
+        }
+        response.reset(exchange);
+        return response;
+    }
+    
+    /**
+     * Gets a Context object from the pool or creates a new one if the pool is empty.
+     * 
+     * @param request the request object
+     * @param response the response object
+     * @return a Context object
+     */
+    private Context getContext(Request request, Response response) {
+        if (!useObjectPooling) {
+            return new Context(request, response);
+        }
+        
+        Context context = contextPool.poll();
+        if (context == null) {
+            return new Context(request, response);
+        }
+        context.reset(request, response);
+        return context;
+    }
+    
+    /**
+     * Returns objects to their respective pools after use.
+     * 
+     * @param context the context to recycle
+     * @param request the request to recycle
+     * @param response the response to recycle
+     */
+    private void recycleObjects(Context context, Request request, Response response) {
+        if (!useObjectPooling) {
+            return;
+        }
+        
+        // Only recycle if pools aren't full
+        contextPool.offer(context);
+        requestPool.offer(request);
+        responsePool.offer(response);
+    }
+
+    /**
      * Internal HTTP handler that processes all incoming requests.
      */
     private class BlyFastHttpHandler implements HttpHandler {
@@ -364,9 +493,9 @@ public class Blyfast {
         private void processRequest(HttpServerExchange exchange) {
             try {
                 // Create request and response objects
-                Request request = new Request(exchange);
-                Response response = new Response(exchange);
-                Context context = new Context(request, response);
+                Request request = getRequest(exchange);
+                Response response = getResponse(exchange);
+                Context context = getContext(request, response);
 
                 // Process global middleware
                 for (Middleware middleware : globalMiddleware) {
@@ -376,10 +505,12 @@ public class Blyfast {
                     } catch (Exception e) {
                         logger.error(LogUtil.error("Error in middleware: " + e.getMessage()), e);
                         response.status(500).json("{\"error\": \"Internal Server Error\"}");
+                        recycleObjects(context, request, response);
                         return; // Exit early on error
                     }
 
                     if (!continueProcessing || response.isSent()) {
+                        recycleObjects(context, request, response);
                         return; // Middleware chain was interrupted or response was sent
                     }
                 }
@@ -406,10 +537,12 @@ public class Blyfast {
                         } catch (Exception e) {
                             logger.error(LogUtil.error("Error in route middleware: " + e.getMessage()), e);
                             response.status(500).json("{\"error\": \"Internal Server Error\"}");
+                            recycleObjects(context, request, response);
                             return; // Exit early on error
                         }
 
                         if (!continueProcessing || response.isSent()) {
+                            recycleObjects(context, request, response);
                             return; // Middleware chain was interrupted or response was sent
                         }
                     }
@@ -427,6 +560,9 @@ public class Blyfast {
                     // No route found - return 404
                     response.status(404).json("{\"error\": \"Not Found\"}");
                 }
+                
+                // Return objects to the pool after processing
+                recycleObjects(context, request, response);
             } catch (Exception e) {
                 logger.error(LogUtil.error("Unhandled error in request processing: " + e.getMessage()), e);
                 if (!exchange.isResponseStarted()) {

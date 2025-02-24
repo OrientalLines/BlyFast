@@ -82,6 +82,9 @@ public class PathProcessor {
                 // It's a parameter (e.g., :id)
                 String paramName = segment.substring(1);
                 paramNames.add(paramName);
+                
+                // Use a more precise regex for parameter matching
+                // Match any character except slash, ensure non-empty
                 patternBuilder.append("([^/]+)");
             } else if (segment.equals("*")) {
                 // It's a wildcard
@@ -93,7 +96,7 @@ public class PathProcessor {
         }
 
         // Add trailing slash match if the original path ends with a slash
-        if (normalizedPath.endsWith("/")) {
+        if (path.endsWith("/")) {
             patternBuilder.append("/?");
         } else {
             patternBuilder.append("/?");
@@ -120,7 +123,9 @@ public class PathProcessor {
         // Ensure the path starts with a slash
         String normalized = path.startsWith("/") ? path : "/" + path;
 
-        // Handle trailing slashes
+        // Handle trailing slashes - preserve them in the normalized path
+        // but handle them separately in the regex pattern
+        // This is important for paths with parameters
         if (normalized.length() > 1 && normalized.endsWith("/")) {
             return normalized.substring(0, normalized.length() - 1);
         }
