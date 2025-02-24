@@ -18,4 +18,4 @@ public interface Middleware {
      * @throws Exception if an error occurs during processing
      */
     boolean handle(Context ctx) throws Exception;
-} 
+}

@@ -20,12 +20,12 @@ public class CommonMiddleware {
         return ctx -> {
             long startTime = System.currentTimeMillis();
             String requestId = UUID.randomUUID().toString().substring(0, 8);
-            
+
             ctx.request().setAttribute("requestId", requestId);
             ctx.request().setAttribute("startTime", startTime);
-            
+
             logger.info("[{}] {} {} started", requestId, ctx.request().getMethod(), ctx.request().getPath());
-            
+
             // Continue processing
             return true;
         };
@@ -46,7 +46,7 @@ public class CommonMiddleware {
                         long duration = System.currentTimeMillis() - startTime;
                         String requestId = (String) ctx.request().getAttribute("requestId");
                         int status = exchange.getStatusCode();
-                        
+
                         logger.info("[{}] {} {} completed with status {} in {}ms",
                                 requestId, ctx.request().getMethod(), ctx.request().getPath(),
                                 status, duration);
@@ -55,7 +55,7 @@ public class CommonMiddleware {
                     nextListener.proceed();
                 }
             });
-            
+
             // Continue processing
             return true;
         };
@@ -73,7 +73,7 @@ public class CommonMiddleware {
     /**
      * Creates a CORS middleware with custom settings.
      *
-     * @param allowOrigin the allowed origin
+     * @param allowOrigin  the allowed origin
      * @param allowMethods the allowed methods
      * @param allowHeaders the allowed headers
      * @return the middleware
@@ -83,14 +83,14 @@ public class CommonMiddleware {
             ctx.header("Access-Control-Allow-Origin", allowOrigin);
             ctx.header("Access-Control-Allow-Methods", allowMethods);
             ctx.header("Access-Control-Allow-Headers", allowHeaders);
-            
+
             // Handle OPTIONS requests
             if (ctx.request().getMethod().equalsIgnoreCase("OPTIONS")) {
                 ctx.status(204);
                 ctx.response().status(204).send("");
                 return false; // Stop processing
             }
-            
+
             // Continue processing
             return true;
         };
@@ -107,7 +107,7 @@ public class CommonMiddleware {
             ctx.header("X-Frame-Options", "DENY");
             ctx.header("X-XSS-Protection", "1; mode=block");
             ctx.header("Referrer-Policy", "no-referrer-when-downgrade");
-            
+
             // Continue processing
             return true;
         };
@@ -124,9 +124,10 @@ public class CommonMiddleware {
             if (acceptEncoding != null && acceptEncoding.contains("gzip")) {
                 ctx.header("Content-Encoding", "gzip");
                 // Enable gzip encoding at the Undertow level if needed
-                // This would typically be configured at the server level rather than per-request
+                // This would typically be configured at the server level rather than
+                // per-request
             }
-            
+
             // Continue processing
             return true;
         };
@@ -143,9 +144,9 @@ public class CommonMiddleware {
             // Set timeout at the Undertow level
             ctx.exchange().setMaxEntitySize(timeoutMillis); // This is not a timeout, but a size limit
             // Actual timeout handling would typically be configured at the server level
-            
+
             // Continue processing
             return true;
         };
     }
-} 
+}

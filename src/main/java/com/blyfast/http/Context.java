@@ -19,7 +19,7 @@ public class Context {
     /**
      * Creates a new context with the given request and response.
      *
-     * @param request the HTTP request
+     * @param request  the HTTP request
      * @param response the HTTP response
      */
     public Context(Request request, Response response) {
@@ -108,7 +108,7 @@ public class Context {
      * Parses the request body into an object of the specified type.
      *
      * @param clazz the class to parse into
-     * @param <T> the type of the object
+     * @param <T>   the type of the object
      * @return the parsed object
      * @throws IOException if an I/O error occurs
      */
@@ -130,7 +130,7 @@ public class Context {
     /**
      * Sets a response header.
      *
-     * @param name the header name
+     * @param name  the header name
      * @param value the header value
      * @return this context for method chaining
      */
@@ -186,7 +186,7 @@ public class Context {
     /**
      * Stores a value in the context locals for the current request/response cycle.
      *
-     * @param key the key
+     * @param key   the key
      * @param value the value
      * @return this context for method chaining
      */
@@ -210,7 +210,7 @@ public class Context {
     /**
      * Sends a standardized error response.
      *
-     * @param status the HTTP status code
+     * @param status  the HTTP status code
      * @param message the error message
      * @return this context for method chaining
      */
@@ -229,4 +229,4 @@ public class Context {
         response.redirect(url);
         return this;
     }
-} 
+}

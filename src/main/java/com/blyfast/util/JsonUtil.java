@@ -16,12 +16,12 @@ import java.util.Map;
  */
 public class JsonUtil {
     private static final ObjectMapper mapper;
-    
+
     static {
         mapper = new ObjectMapper();
         mapper.configure(SerializationFeature.INDENT_OUTPUT, true);
     }
-    
+
     /**
      * Converts an object to a JSON string.
      *
@@ -32,7 +32,7 @@ public class JsonUtil {
     public static String toJson(Object obj) throws JsonProcessingException {
         return mapper.writeValueAsString(obj);
     }
-    
+
     /**
      * Converts an object to a pretty-printed JSON string.
      *
@@ -43,33 +43,33 @@ public class JsonUtil {
     public static String toPrettyJson(Object obj) throws JsonProcessingException {
         return mapper.writerWithDefaultPrettyPrinter().writeValueAsString(obj);
     }
-    
+
     /**
      * Parses a JSON string into an object of the specified type.
      *
-     * @param json the JSON string
+     * @param json  the JSON string
      * @param clazz the class of the object
-     * @param <T> the type of the object
+     * @param <T>   the type of the object
      * @return the parsed object
      * @throws IOException if the parsing fails
      */
     public static <T> T fromJson(String json, Class<T> clazz) throws IOException {
         return mapper.readValue(json, clazz);
     }
-    
+
     /**
      * Parses a JSON string into a list of objects of the specified type.
      *
-     * @param json the JSON string
+     * @param json  the JSON string
      * @param clazz the class of the objects in the list
-     * @param <T> the type of the objects in the list
+     * @param <T>   the type of the objects in the list
      * @return the parsed list
      * @throws IOException if the parsing fails
      */
     public static <T> List<T> fromJsonList(String json, Class<T> clazz) throws IOException {
         return mapper.readValue(json, mapper.getTypeFactory().constructCollectionType(List.class, clazz));
     }
-    
+
     /**
      * Parses a JSON string into a map.
      *
@@ -78,9 +78,10 @@ public class JsonUtil {
      * @throws IOException if the parsing fails
      */
     public static Map<String, Object> fromJsonMap(String json) throws IOException {
-        return mapper.readValue(json, new TypeReference<Map<String, Object>>() {});
+        return mapper.readValue(json, new TypeReference<Map<String, Object>>() {
+        });
     }
-    
+
     /**
      * Parses a JSON string into a JsonNode.
      *
@@ -91,7 +92,7 @@ public class JsonUtil {
     public static JsonNode parseJson(String json) throws IOException {
         return mapper.readTree(json);
     }
-    
+
     /**
      * Creates a new empty ObjectNode.
      *
@@ -100,7 +101,7 @@ public class JsonUtil {
     public static ObjectNode createObjectNode() {
         return mapper.createObjectNode();
     }
-    
+
     /**
      * Gets the ObjectMapper instance.
      *
@@ -109,4 +110,4 @@ public class JsonUtil {
     public static ObjectMapper getMapper() {
         return mapper;
     }
-} 
+}

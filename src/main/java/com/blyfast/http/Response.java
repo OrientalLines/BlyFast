@@ -19,7 +19,7 @@ import java.util.Map;
 public class Response {
     private static final Logger logger = LoggerFactory.getLogger(Response.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
-    
+
     private final HttpServerExchange exchange;
     private boolean sent = false;
 
@@ -46,7 +46,7 @@ public class Response {
     /**
      * Sets a response header.
      *
-     * @param name the header name
+     * @param name  the header name
      * @param value the header value
      * @return this response for method chaining
      */
@@ -77,11 +77,11 @@ public class Response {
             logger.warn("Response already sent, ignoring subsequent send() call");
             return this;
         }
-        
+
         if (!exchange.getResponseHeaders().contains(Headers.CONTENT_TYPE)) {
             type("text/plain");
         }
-        
+
         sender().send(text);
         sent = true;
         return this;
@@ -135,7 +135,7 @@ public class Response {
             logger.warn("Response already sent, ignoring subsequent send() call");
             return this;
         }
-        
+
         sender().send(ByteBuffer.wrap(data));
         sent = true;
         return this;
@@ -156,7 +156,7 @@ public class Response {
     /**
      * Redirects to the specified URL.
      *
-     * @param url the URL to redirect to
+     * @param url       the URL to redirect to
      * @param permanent whether the redirect is permanent (301) or temporary (302)
      * @return this response for method chaining
      */
@@ -178,9 +178,10 @@ public class Response {
     }
 
     /**
-     * Sends a standardized error response with the specified status code and message.
+     * Sends a standardized error response with the specified status code and
+     * message.
      *
-     * @param status the status code
+     * @param status  the status code
      * @param message the error message
      * @return this response for method chaining
      */
@@ -189,7 +190,7 @@ public class Response {
         error.put("error", true);
         error.put("status", status);
         error.put("message", message);
-        
+
         return status(status).json(error);
     }
 
@@ -219,4 +220,4 @@ public class Response {
     public boolean isSent() {
         return sent;
     }
-} 
+}

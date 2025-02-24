@@ -16,8 +16,8 @@ public class PathProcessor {
      * Creates a new PathProcessor instance.
      *
      * @param normalizedPath the normalized path
-     * @param pattern the regex pattern for matching
-     * @param paramNames the list of parameter names
+     * @param pattern        the regex pattern for matching
+     * @param paramNames     the list of parameter names
      */
     private PathProcessor(String normalizedPath, Pattern pattern, List<String> paramNames) {
         this.normalizedPath = normalizedPath;
@@ -61,22 +61,22 @@ public class PathProcessor {
     public static PathProcessor process(String path) {
         // Normalize the path
         String normalizedPath = normalizePath(path);
-        
+
         // Extract parameter names
         List<String> paramNames = new ArrayList<>();
-        
+
         // Convert the path to a regex pattern
         StringBuilder patternBuilder = new StringBuilder("^");
         String[] segments = normalizedPath.split("/");
-        
+
         for (int i = 0; i < segments.length; i++) {
             String segment = segments[i];
             if (segment.isEmpty()) {
                 continue;
             }
-            
+
             patternBuilder.append("/");
-            
+
             // Check if this segment is a parameter
             if (segment.startsWith(":")) {
                 // It's a parameter (e.g., :id)
@@ -91,22 +91,23 @@ public class PathProcessor {
                 patternBuilder.append(Pattern.quote(segment));
             }
         }
-        
+
         // Add trailing slash match if the original path ends with a slash
         if (normalizedPath.endsWith("/")) {
             patternBuilder.append("/?");
         } else {
             patternBuilder.append("/?");
         }
-        
+
         patternBuilder.append("$");
-        
+
         Pattern pattern = Pattern.compile(patternBuilder.toString());
         return new PathProcessor(normalizedPath, pattern, paramNames);
     }
 
     /**
-     * Normalizes a path by ensuring it starts with a slash and handling trailing slashes.
+     * Normalizes a path by ensuring it starts with a slash and handling trailing
+     * slashes.
      *
      * @param path the path to normalize
      * @return the normalized path
@@ -115,15 +116,15 @@ public class PathProcessor {
         if (path == null || path.isEmpty()) {
             return "/";
         }
-        
+
         // Ensure the path starts with a slash
         String normalized = path.startsWith("/") ? path : "/" + path;
-        
+
         // Handle trailing slashes
         if (normalized.length() > 1 && normalized.endsWith("/")) {
             return normalized.substring(0, normalized.length() - 1);
         }
-        
+
         return normalized;
     }
-} 
+}

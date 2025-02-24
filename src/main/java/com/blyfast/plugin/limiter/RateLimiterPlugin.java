@@ -19,14 +19,14 @@ public class RateLimiterPlugin extends AbstractPlugin {
     private final RateLimiterConfig config;
     private final Map<String, TokenBucket> buckets = new ConcurrentHashMap<>();
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
-    
+
     /**
      * Creates a new rate limiter plugin with default configuration.
      */
     public RateLimiterPlugin() {
         this(new RateLimiterConfig());
     }
-    
+
     /**
      * Creates a new rate limiter plugin with the specified configuration.
      * 
@@ -36,25 +36,25 @@ public class RateLimiterPlugin extends AbstractPlugin {
         super("rate-limiter", "1.0.0");
         this.config = config;
     }
-    
+
     @Override
     public void register(Blyfast app) {
         logger.info("Registering Rate Limiter plugin");
         app.set("rateLimiter", this);
-        
+
         // Schedule cleanup of expired buckets
-        scheduler.scheduleAtFixedRate(this::cleanupExpiredBuckets, 
-                config.getCleanupInterval().toMillis(), 
-                config.getCleanupInterval().toMillis(), 
+        scheduler.scheduleAtFixedRate(this::cleanupExpiredBuckets,
+                config.getCleanupInterval().toMillis(),
+                config.getCleanupInterval().toMillis(),
                 TimeUnit.MILLISECONDS);
     }
-    
+
     @Override
     public void onStop(Blyfast app) {
         super.onStop(app);
         scheduler.shutdown();
     }
-    
+
     /**
      * Creates a rate limiting middleware with the current configuration.
      * 
@@ -63,7 +63,7 @@ public class RateLimiterPlugin extends AbstractPlugin {
     public Middleware createMiddleware() {
         return createMiddleware(config.getKeyExtractor());
     }
-    
+
     /**
      * Creates a rate limiting middleware with a custom key extractor.
      * 
@@ -73,36 +73,35 @@ public class RateLimiterPlugin extends AbstractPlugin {
     public Middleware createMiddleware(Function<com.blyfast.http.Context, String> keyExtractor) {
         return ctx -> {
             String key = keyExtractor.apply(ctx);
-            
+
             // Get or create a token bucket for this key
-            TokenBucket bucket = buckets.computeIfAbsent(key, k -> 
-                    new TokenBucket(config.getMaxTokens(), config.getRefillRate()));
-            
+            TokenBucket bucket = buckets.computeIfAbsent(key,
+                    k -> new TokenBucket(config.getMaxTokens(), config.getRefillRate()));
+
             // Try to consume a token
             if (!bucket.tryConsume()) {
                 // Rate limit exceeded
                 ctx.status(429).header("Retry-After", String.valueOf(config.getRetryAfter().getSeconds()));
                 ctx.json(Map.of(
-                    "error", true,
-                    "message", "Rate limit exceeded. Try again later."
-                ));
+                        "error", true,
+                        "message", "Rate limit exceeded. Try again later."));
                 return false; // Stop middleware chain
             }
-            
+
             return true; // Continue processing
         };
     }
-    
+
     /**
      * Cleans up expired token buckets to prevent memory leaks.
      */
     private void cleanupExpiredBuckets() {
         long now = System.currentTimeMillis();
         long expirationTime = now - config.getExpirationTime().toMillis();
-        
+
         buckets.entrySet().removeIf(entry -> entry.getValue().getLastAccessTime() < expirationTime);
     }
-    
+
     /**
      * Gets the rate limiter configuration.
      * 
@@ -111,7 +110,7 @@ public class RateLimiterPlugin extends AbstractPlugin {
     public RateLimiterConfig getConfig() {
         return config;
     }
-    
+
     /**
      * Token bucket implementation for rate limiting.
      */
@@ -121,11 +120,11 @@ public class RateLimiterPlugin extends AbstractPlugin {
         private double tokens;
         private long lastRefillTime;
         private long lastAccessTime;
-        
+
         /**
          * Creates a new token bucket.
          * 
-         * @param maxTokens the maximum number of tokens
+         * @param maxTokens  the maximum number of tokens
          * @param refillRate the refill rate in tokens per second
          */
         public TokenBucket(double maxTokens, double refillRate) {
@@ -135,7 +134,7 @@ public class RateLimiterPlugin extends AbstractPlugin {
             this.lastRefillTime = System.currentTimeMillis();
             this.lastAccessTime = lastRefillTime;
         }
-        
+
         /**
          * Tries to consume a token from the bucket.
          * 
@@ -143,30 +142,30 @@ public class RateLimiterPlugin extends AbstractPlugin {
          */
         public synchronized boolean tryConsume() {
             refill();
-            
+
             if (tokens < 1.0) {
                 return false;
             }
-            
+
             tokens -= 1.0;
             lastAccessTime = System.currentTimeMillis();
             return true;
         }
-        
+
         /**
          * Refills the token bucket based on the elapsed time.
          */
         private void refill() {
             long now = System.currentTimeMillis();
             long elapsed = now - lastRefillTime;
-            
+
             if (elapsed > 0) {
                 double tokensToAdd = elapsed * refillRate;
                 tokens = Math.min(maxTokens, tokens + tokensToAdd);
                 lastRefillTime = now;
             }
         }
-        
+
         /**
          * Gets the last access time of the bucket.
          * 
@@ -176,7 +175,7 @@ public class RateLimiterPlugin extends AbstractPlugin {
             return lastAccessTime;
         }
     }
-    
+
     /**
      * Configuration for the rate limiter plugin.
      */
@@ -186,62 +185,64 @@ public class RateLimiterPlugin extends AbstractPlugin {
         private Duration retryAfter = Duration.ofSeconds(60); // Retry-After header value
         private Duration expirationTime = Duration.ofHours(1); // Time after which unused buckets are removed
         private Duration cleanupInterval = Duration.ofMinutes(5); // Interval for cleaning up expired buckets
-        private Function<com.blyfast.http.Context, String> keyExtractor = ctx -> ctx.request().getHeader("X-Forwarded-For") != null 
-                ? ctx.request().getHeader("X-Forwarded-For") 
-                : ctx.request().getExchange().getSourceAddress().getHostString(); // Default key extractor uses IP address
-        
+        private Function<com.blyfast.http.Context, String> keyExtractor = ctx -> ctx.request()
+                .getHeader("X-Forwarded-For") != null
+                        ? ctx.request().getHeader("X-Forwarded-For")
+                        : ctx.request().getExchange().getSourceAddress().getHostString(); // Default key extractor uses
+                                                                                          // IP address
+
         public double getMaxTokens() {
             return maxTokens;
         }
-        
+
         public RateLimiterConfig setMaxTokens(double maxTokens) {
             this.maxTokens = maxTokens;
             return this;
         }
-        
+
         public double getRefillRate() {
             return refillRate;
         }
-        
+
         public RateLimiterConfig setRefillRate(double refillRate) {
             this.refillRate = refillRate;
             return this;
         }
-        
+
         public Duration getRetryAfter() {
             return retryAfter;
         }
-        
+
         public RateLimiterConfig setRetryAfter(Duration retryAfter) {
             this.retryAfter = retryAfter;
             return this;
         }
-        
+
         public Duration getExpirationTime() {
             return expirationTime;
         }
-        
+
         public RateLimiterConfig setExpirationTime(Duration expirationTime) {
             this.expirationTime = expirationTime;
             return this;
         }
-        
+
         public Duration getCleanupInterval() {
             return cleanupInterval;
         }
-        
+
         public RateLimiterConfig setCleanupInterval(Duration cleanupInterval) {
             this.cleanupInterval = cleanupInterval;
             return this;
         }
-        
+
         public Function<com.blyfast.http.Context, String> getKeyExtractor() {
             return keyExtractor;
         }
-        
+
         public RateLimiterConfig setKeyExtractor(Function<com.blyfast.http.Context, String> keyExtractor) {
             this.keyExtractor = keyExtractor;
             return this;
         }
     }
-} 
+}

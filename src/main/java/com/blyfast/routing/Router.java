@@ -23,8 +23,8 @@ public class Router {
     /**
      * Adds a route to the router.
      *
-     * @param method the HTTP method
-     * @param path the route path
+     * @param method  the HTTP method
+     * @param path    the route path
      * @param handler the handler function
      * @return the created route for further customization
      */
@@ -37,7 +37,7 @@ public class Router {
     /**
      * Adds a route for the GET method.
      *
-     * @param path the route path
+     * @param path    the route path
      * @param handler the handler function
      * @return the created route
      */
@@ -48,7 +48,7 @@ public class Router {
     /**
      * Adds a route for the POST method.
      *
-     * @param path the route path
+     * @param path    the route path
      * @param handler the handler function
      * @return the created route
      */
@@ -59,7 +59,7 @@ public class Router {
     /**
      * Adds a route for the PUT method.
      *
-     * @param path the route path
+     * @param path    the route path
      * @param handler the handler function
      * @return the created route
      */
@@ -70,7 +70,7 @@ public class Router {
     /**
      * Adds a route for the DELETE method.
      *
-     * @param path the route path
+     * @param path    the route path
      * @param handler the handler function
      * @return the created route
      */
@@ -82,7 +82,7 @@ public class Router {
      * Finds a route that matches the given method and path.
      *
      * @param method the HTTP method
-     * @param path the request path
+     * @param path   the request path
      * @return the matching route or null if none matches
      */
     public Route findRoute(String method, String path) {
@@ -98,15 +98,15 @@ public class Router {
      * Resolves the path parameters for a request based on the matching route.
      *
      * @param request the request
-     * @param route the matching route
+     * @param route   the matching route
      */
     public void resolveParams(Request request, Route route) {
         String path = request.getPath();
         Matcher matcher = route.getPattern().matcher(path);
-        
+
         if (matcher.matches()) {
             List<String> paramNames = route.getParamNames();
-            
+
             // Extract parameter values from the matcher groups
             for (int i = 0; i < paramNames.size(); i++) {
                 // Groups are 1-indexed, with group 0 being the entire match
@@ -129,4 +129,4 @@ public class Router {
     public List<Route> getRoutes() {
         return new ArrayList<>(routes);
     }
-} 
+}

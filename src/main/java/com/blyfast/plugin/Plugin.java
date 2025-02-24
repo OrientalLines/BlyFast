@@ -7,7 +7,7 @@ import com.blyfast.core.Blyfast;
  * Plugins can extend the framework's functionality in a modular way.
  */
 public interface Plugin {
-    
+
     /**
      * Registers the plugin with the Blyfast application.
      * This method is called when the plugin is added to the application.
@@ -15,21 +15,21 @@ public interface Plugin {
      * @param app the Blyfast application instance
      */
     void register(Blyfast app);
-    
+
     /**
      * Gets the name of the plugin.
      * 
      * @return the plugin name
      */
     String getName();
-    
+
     /**
      * Gets the version of the plugin.
      * 
      * @return the plugin version
      */
     String getVersion();
-    
+
     /**
      * Called when the application is starting.
      * 
@@ -38,7 +38,7 @@ public interface Plugin {
     default void onStart(Blyfast app) {
         // Default implementation does nothing
     }
-    
+
     /**
      * Called when the application is stopping.
      * 
@@ -47,4 +47,4 @@ public interface Plugin {
     default void onStop(Blyfast app) {
         // Default implementation does nothing
     }
-} 
+}

@@ -19,7 +19,7 @@ import java.util.stream.Collectors;
  */
 public class Request {
     private static final ObjectMapper MAPPER = new ObjectMapper();
-    
+
     private final HttpServerExchange exchange;
     private String body;
     private JsonNode jsonBody;
@@ -110,7 +110,7 @@ public class Request {
             if (!exchange.isBlocking()) {
                 exchange.startBlocking();
             }
-            
+
             try (BufferedReader reader = new BufferedReader(
                     new InputStreamReader(exchange.getInputStream(), StandardCharsets.UTF_8))) {
                 body = reader.lines().collect(Collectors.joining());
@@ -136,7 +136,7 @@ public class Request {
      * Deserializes the request body into an object of the specified type.
      *
      * @param clazz the class of the object to deserialize into
-     * @param <T> the type of the object
+     * @param <T>   the type of the object
      * @return the deserialized object
      * @throws IOException if an I/O error occurs
      */
@@ -147,7 +147,7 @@ public class Request {
     /**
      * Sets a path parameter.
      *
-     * @param name the parameter name
+     * @param name  the parameter name
      * @param value the parameter value
      */
     public void setPathParam(String name, String value) {
@@ -176,7 +176,7 @@ public class Request {
     /**
      * Sets a custom attribute on the request.
      *
-     * @param name the attribute name
+     * @param name  the attribute name
      * @param value the attribute value
      */
     public void setAttribute(String name, Object value) {
@@ -201,4 +201,4 @@ public class Request {
     public HttpServerExchange getExchange() {
         return exchange;
     }
-} 
+}

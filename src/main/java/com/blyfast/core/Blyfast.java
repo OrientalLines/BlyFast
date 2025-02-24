@@ -25,7 +25,7 @@ import java.util.concurrent.TimeUnit;
  */
 public class Blyfast {
     private static final Logger logger = LoggerFactory.getLogger(Blyfast.class);
-    
+
     private final Router router;
     private final List<Middleware> globalMiddleware;
     private final List<Plugin> plugins;
@@ -34,7 +34,7 @@ public class Blyfast {
     private String host = "0.0.0.0";
     private int port = 8080;
     private ThreadPool threadPool;
-    
+
     /**
      * Creates a new Blyfast application instance.
      */
@@ -43,13 +43,14 @@ public class Blyfast {
         this.globalMiddleware = new ArrayList<>();
         this.plugins = new ArrayList<>();
         this.locals = new HashMap<>();
-        
+
         // Initialize the thread pool with default configuration
         this.threadPool = new ThreadPool();
     }
-    
+
     /**
-     * Creates a new Blyfast application instance with a custom thread pool configuration.
+     * Creates a new Blyfast application instance with a custom thread pool
+     * configuration.
      * 
      * @param threadPoolConfig the thread pool configuration
      */
@@ -58,11 +59,11 @@ public class Blyfast {
         this.globalMiddleware = new ArrayList<>();
         this.plugins = new ArrayList<>();
         this.locals = new HashMap<>();
-        
+
         // Initialize the thread pool with custom configuration
         this.threadPool = new ThreadPool(threadPoolConfig);
     }
-    
+
     /**
      * Sets the host for the server.
      * 
@@ -73,7 +74,7 @@ public class Blyfast {
         this.host = host;
         return this;
     }
-    
+
     /**
      * Sets the port for the server.
      * 
@@ -84,7 +85,7 @@ public class Blyfast {
         this.port = port;
         return this;
     }
-    
+
     /**
      * Adds a global middleware to the application.
      * 
@@ -95,7 +96,7 @@ public class Blyfast {
         this.globalMiddleware.add(middleware);
         return this;
     }
-    
+
     /**
      * Registers a plugin with the application.
      * 
@@ -108,7 +109,7 @@ public class Blyfast {
         plugin.register(this);
         return this;
     }
-    
+
     /**
      * Gets a plugin by name.
      * 
@@ -123,7 +124,7 @@ public class Blyfast {
         }
         return null;
     }
-    
+
     /**
      * Checks if a plugin is registered.
      * 
@@ -133,11 +134,11 @@ public class Blyfast {
     public boolean hasPlugin(String name) {
         return getPlugin(name) != null;
     }
-    
+
     /**
      * Sets a value in the application locals.
      * 
-     * @param key the key
+     * @param key   the key
      * @param value the value
      * @return this instance for method chaining
      */
@@ -145,7 +146,7 @@ public class Blyfast {
         locals.put(key, value);
         return this;
     }
-    
+
     /**
      * Gets a value from the application locals.
      * 
@@ -157,11 +158,11 @@ public class Blyfast {
     public <T> T get(String key) {
         return (T) locals.get(key);
     }
-    
+
     /**
      * Defines a GET route.
      * 
-     * @param path the route path
+     * @param path    the route path
      * @param handler the handler function
      * @return this instance for method chaining
      */
@@ -169,11 +170,11 @@ public class Blyfast {
         router.addRoute("GET", path, handler);
         return this;
     }
-    
+
     /**
      * Defines a POST route.
      * 
-     * @param path the route path
+     * @param path    the route path
      * @param handler the handler function
      * @return this instance for method chaining
      */
@@ -181,11 +182,11 @@ public class Blyfast {
         router.addRoute("POST", path, handler);
         return this;
     }
-    
+
     /**
      * Defines a PUT route.
      * 
-     * @param path the route path
+     * @param path    the route path
      * @param handler the handler function
      * @return this instance for method chaining
      */
@@ -193,11 +194,11 @@ public class Blyfast {
         router.addRoute("PUT", path, handler);
         return this;
     }
-    
+
     /**
      * Defines a DELETE route.
      * 
-     * @param path the route path
+     * @param path    the route path
      * @param handler the handler function
      * @return this instance for method chaining
      */
@@ -205,12 +206,12 @@ public class Blyfast {
         router.addRoute("DELETE", path, handler);
         return this;
     }
-    
+
     /**
      * Defines a route with a custom HTTP method.
      * 
-     * @param method the HTTP method
-     * @param path the route path
+     * @param method  the HTTP method
+     * @param path    the route path
      * @param handler the handler function
      * @return this instance for method chaining
      */
@@ -218,7 +219,7 @@ public class Blyfast {
         router.addRoute(method, path, handler);
         return this;
     }
-    
+
     /**
      * Gets the router instance.
      * 
@@ -227,7 +228,7 @@ public class Blyfast {
     public Router getRouter() {
         return router;
     }
-    
+
     /**
      * Gets the thread pool used by this application.
      * 
@@ -236,7 +237,7 @@ public class Blyfast {
     public ThreadPool getThreadPool() {
         return threadPool;
     }
-    
+
     /**
      * Sets the thread pool for this application.
      * 
@@ -247,14 +248,14 @@ public class Blyfast {
         this.threadPool = threadPool;
         return this;
     }
-    
+
     /**
      * Starts the server and begins listening for requests.
      */
     public void listen() {
         listen(() -> logger.info("Blyfast server started on {}:{}", host, port));
     }
-    
+
     /**
      * Starts the server with a callback function.
      * 
@@ -265,20 +266,21 @@ public class Blyfast {
         for (Plugin plugin : plugins) {
             plugin.onStart(this);
         }
-        
+
         HttpHandler handler = new BlyFastHttpHandler();
         server = Undertow.builder()
                 .addHttpListener(port, host)
                 .setHandler(handler)
-                .setWorkerThreads(threadPool.getConfig().getMaxPoolSize()) // Set Undertow worker threads to match our thread pool
+                .setWorkerThreads(threadPool.getConfig().getMaxPoolSize()) // Set Undertow worker threads to match our
+                                                                           // thread pool
                 .build();
-                
+
         server.start();
         if (callback != null) {
             callback.run();
         }
     }
-    
+
     /**
      * Stops the server.
      */
@@ -288,9 +290,9 @@ public class Blyfast {
             for (Plugin plugin : plugins) {
                 plugin.onStop(this);
             }
-            
+
             server.stop();
-            
+
             // Shutdown the thread pool
             threadPool.shutdown();
             try {
@@ -303,11 +305,11 @@ public class Blyfast {
                 threadPool.shutdownNow();
                 Thread.currentThread().interrupt();
             }
-            
+
             logger.info("Blyfast server stopped");
         }
     }
-    
+
     /**
      * Internal HTTP handler that processes all incoming requests.
      */
@@ -319,17 +321,17 @@ public class Blyfast {
                 exchange.dispatch(this);
                 return;
             }
-            
+
             // We're now in a worker thread
             try {
                 // Make sure the exchange is blocking for body reading
                 if (!exchange.isBlocking()) {
                     exchange.startBlocking();
                 }
-                
+
                 // Process the request directly, not in a separate thread
                 processRequest(exchange);
-                
+
                 // Ensure the exchange is completed
                 if (!exchange.isComplete()) {
                     exchange.endExchange();
@@ -345,7 +347,7 @@ public class Blyfast {
                 }
             }
         }
-        
+
         /**
          * Processes a request using the middleware and router.
          * 
@@ -368,25 +370,25 @@ public class Blyfast {
                         response.status(500).json("{\"error\": \"Internal Server Error\"}");
                         return; // Exit early on error
                     }
-                    
+
                     if (!continueProcessing || response.isSent()) {
                         return; // Middleware chain was interrupted or response was sent
                     }
                 }
-                
+
                 // Process the route
                 String method = request.getMethod();
                 String path = request.getPath();
-                
+
                 Route route = router.findRoute(method, path);
                 if (route != null) {
                     // Extract path parameters - debug logging
                     logger.debug("Found route: {} {}, pattern: {}", method, path, route.getPattern());
                     router.resolveParams(request, route);
-                    
+
                     // Debug log the extracted parameters
                     logger.debug("Path parameters: {}", request.getPathParams());
-                    
+
                     // Process route-specific middleware
                     for (Middleware middleware : route.getMiddleware()) {
                         boolean continueProcessing;
@@ -397,12 +399,12 @@ public class Blyfast {
                             response.status(500).json("{\"error\": \"Internal Server Error\"}");
                             return; // Exit early on error
                         }
-                        
+
                         if (!continueProcessing || response.isSent()) {
                             return; // Middleware chain was interrupted or response was sent
                         }
                     }
-                    
+
                     // Execute the route handler
                     try {
                         route.getHandler().handle(context);
@@ -425,11 +427,11 @@ public class Blyfast {
             }
         }
     }
-    
+
     /**
      * Functional interface for route handlers.
      */
     public interface Handler {
         void handle(Context ctx) throws Exception;
     }
-} 
+}

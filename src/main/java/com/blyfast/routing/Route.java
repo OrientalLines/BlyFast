@@ -22,8 +22,8 @@ public class Route {
     /**
      * Creates a new route.
      *
-     * @param method the HTTP method
-     * @param path the route path
+     * @param method  the HTTP method
+     * @param path    the route path
      * @param handler the handler function
      */
     public Route(String method, String path, Blyfast.Handler handler) {
@@ -31,7 +31,7 @@ public class Route {
         this.path = path;
         this.handler = handler;
         this.middleware = new ArrayList<>();
-        
+
         // Process the path and create a regex pattern for matching
         PathProcessor pathProcessor = PathProcessor.process(path);
         this.normalizedPath = pathProcessor.getNormalizedPath();
@@ -90,19 +90,19 @@ public class Route {
      * Checks if this route matches the given method and path.
      *
      * @param method the HTTP method
-     * @param path the request path
+     * @param path   the request path
      * @return true if the route matches
      */
     public boolean matches(String method, String path) {
         if (!this.method.equalsIgnoreCase(method)) {
             return false;
         }
-        
+
         // Direct path match (fast path)
         if (this.normalizedPath.equals(path)) {
             return true;
         }
-        
+
         // Regex match for paths with parameters
         return pattern.matcher(path).matches();
     }
@@ -124,4 +124,4 @@ public class Route {
     public Pattern getPattern() {
         return pattern;
     }
-} 
+}
