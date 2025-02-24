@@ -3,13 +3,24 @@ package com.blyfast.middleware;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Collection of common middleware implementations.
  */
 public class CommonMiddleware {
     private static final Logger logger = LoggerFactory.getLogger(CommonMiddleware.class);
+
+    // Monitoring counters
+    private static final AtomicInteger requestCounter = new AtomicInteger(0);
+    private static final AtomicInteger errorCounter = new AtomicInteger(0);
+    private static final AtomicLong totalResponseTime = new AtomicLong(0);
+    private static final Map<String, AtomicInteger> pathCounter = new ConcurrentHashMap<>();
 
     /**
      * Creates a logging middleware that logs request information.
@@ -148,5 +159,140 @@ public class CommonMiddleware {
             // Continue processing
             return true;
         };
+    }
+
+    /**
+     * Creates a global exception handler middleware that catches and processes exceptions.
+     *
+     * @return the middleware
+     */
+    public static Middleware exceptionHandler() {
+        return ctx -> {
+            try {
+                return true; // Continue processing the request
+            } catch (Exception e) {
+                logger.error("Uncaught exception during request processing", e);
+                
+                // Determine appropriate status code
+                int statusCode = 500;
+                String message = "Internal Server Error";
+                
+                if (e instanceof IllegalArgumentException) {
+                    statusCode = 400;
+                    message = "Bad Request: " + e.getMessage();
+                } else if (e instanceof SecurityException) {
+                    statusCode = 403;
+                    message = "Forbidden: " + e.getMessage();
+                }
+                
+                // Create error response
+                Map<String, Object> errorResponse = new HashMap<>();
+                errorResponse.put("error", true);
+                errorResponse.put("status", statusCode);
+                errorResponse.put("message", message);
+                
+                // Include stack trace in development mode
+                if (Boolean.getBoolean("blyfast.dev")) {
+                    errorResponse.put("exception", e.getClass().getName());
+                    errorResponse.put("detail", e.getMessage());
+                }
+                
+                // Send error response
+                ctx.status(statusCode).json(errorResponse);
+                
+                return false; // Stop processing further middleware
+            }
+        };
+    }
+    
+    /**
+     * Creates a recovery middleware that attempts to continue processing 
+     * even when errors occur in subsequent middleware.
+     *
+     * @return the middleware
+     */
+    public static Middleware recover() {
+        return ctx -> {
+            try {
+                return true; // Continue to next middleware
+            } catch (Exception e) {
+                logger.warn("Recovered from exception in middleware chain: {}", e.getMessage());
+                logger.debug("Exception details:", e);
+                
+                // Continue processing instead of letting the exception propagate
+                return true;
+            }
+        };
+    }
+
+    /**
+     * Creates a monitoring middleware that tracks request statistics.
+     *
+     * @return the middleware
+     */
+    public static Middleware monitor() {
+        return ctx -> {
+            long startTime = System.currentTimeMillis();
+            String path = ctx.request().getPath();
+            
+            // Increment request counter
+            requestCounter.incrementAndGet();
+            
+            // Increment path-specific counter
+            pathCounter.computeIfAbsent(path, k -> new AtomicInteger(0)).incrementAndGet();
+            
+            // Add a listener for when the exchange completes
+            ctx.exchange().addExchangeCompleteListener((exchange, nextListener) -> {
+                try {
+                    // Record response time
+                    long responseTime = System.currentTimeMillis() - startTime;
+                    totalResponseTime.addAndGet(responseTime);
+                    
+                    // Record errors
+                    int statusCode = exchange.getStatusCode();
+                    if (statusCode >= 400) {
+                        errorCounter.incrementAndGet();
+                    }
+                    
+                    // Log slow requests
+                    if (responseTime > 1000) {
+                        logger.warn("Slow request: {} {} completed in {}ms", 
+                                ctx.request().getMethod(), path, responseTime);
+                    }
+                } finally {
+                    nextListener.proceed();
+                }
+            });
+            
+            // Continue processing
+            return true;
+        };
+    }
+    
+    /**
+     * Gets the current monitoring statistics.
+     *
+     * @return the monitoring statistics
+     */
+    public static Map<String, Object> getMonitoringStats() {
+        Map<String, Object> stats = new HashMap<>();
+        
+        stats.put("totalRequests", requestCounter.get());
+        stats.put("errorCount", errorCounter.get());
+        
+        // Calculate average response time
+        double avgResponseTime = requestCounter.get() > 0 
+                ? (double) totalResponseTime.get() / requestCounter.get() 
+                : 0;
+        stats.put("avgResponseTime", avgResponseTime);
+        
+        // Path-specific stats
+        Map<String, Integer> pathStats = new HashMap<>();
+        for (Map.Entry<String, AtomicInteger> entry : pathCounter.entrySet()) {
+            pathStats.put(entry.getKey(), entry.getValue().get());
+        }
+        stats.put("pathCounts", pathStats);
+        
+        return stats;
     }
 }
