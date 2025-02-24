@@ -295,4 +295,99 @@ public class CommonMiddleware {
         
         return stats;
     }
+
+    /**
+     * Creates a middleware that serves static files from a directory.
+     *
+     * @param directory the directory to serve files from
+     * @return the middleware
+     */
+    public static Middleware fileSystem(String directory) {
+        return fileSystem(directory, "/");
+    }
+
+    /**
+     * Creates a middleware that serves static files from a directory with a custom
+     * URL prefix.
+     *
+     * @param directory  the directory to serve files from
+     * @param urlPrefix  the URL prefix to match against
+     * @return the middleware
+     */
+    public static Middleware fileSystem(String directory, String urlPrefix) {
+        return ctx -> {
+            String path = ctx.request().getPath();
+            
+            // Check if the path starts with the URL prefix
+            if (!path.startsWith(urlPrefix)) {
+                return true; // Continue processing if the path doesn't match
+            }
+            
+            // Remove the URL prefix from the path to get the relative file path
+            String relativePath = path.substring(urlPrefix.length());
+            if (relativePath.startsWith("/")) {
+                relativePath = relativePath.substring(1);
+            }
+            
+            if (relativePath.isEmpty()) {
+                return true; // Continue processing for the root path
+            }
+            
+            // Build the full file path
+            java.io.File file = new java.io.File(directory, relativePath);
+            
+            // Security check - prevent directory traversal attacks
+            if (!file.getCanonicalPath().startsWith(new java.io.File(directory).getCanonicalPath())) {
+                ctx.status(403).error(403, "Forbidden - Access denied");
+                return false;
+            }
+            
+            // Check if file exists and is not a directory
+            if (!file.exists() || file.isDirectory()) {
+                return true; // File not found, continue processing
+            }
+            
+            try {
+                // Set appropriate content type based on file extension
+                String contentType = getContentType(file.getName());
+                ctx.type(contentType);
+                
+                // Read and send file content
+                byte[] content = java.nio.file.Files.readAllBytes(file.toPath());
+                ctx.response().send(content);
+                
+                // Stop middleware chain
+                return false;
+            } catch (Exception e) {
+                logger.error("Error serving file: " + file.getPath(), e);
+                return true; // Continue processing on error
+            }
+        };
+    }
+    
+    /**
+     * Gets the appropriate content type based on the file extension.
+     *
+     * @param fileName the file name
+     * @return the content type
+     */
+    private static String getContentType(String fileName) {
+        String extension = fileName.substring(fileName.lastIndexOf('.') + 1).toLowerCase();
+        
+        switch (extension) {
+            case "html": return "text/html";
+            case "css": return "text/css";
+            case "js": return "application/javascript";
+            case "json": return "application/json";
+            case "png": return "image/png";
+            case "jpg":
+            case "jpeg": return "image/jpeg";
+            case "gif": return "image/gif";
+            case "svg": return "image/svg+xml";
+            case "pdf": return "application/pdf";
+            case "txt": return "text/plain";
+            case "xml": return "application/xml";
+            default: return "application/octet-stream";
+        }
+    }
 }
