@@ -180,7 +180,7 @@ public class ThreadPoolTest {
         assertTrue(startedLatch.await(5, TimeUnit.SECONDS));
         
         // Shutdown the thread pool immediately
-        List<Runnable> unexecutedTasks = threadPool.shutdownNow();
+        List<Runnable> _unexecutedTasks = threadPool.shutdownNow();
         
         // Verify that the thread pool is shutting down
         assertTrue(threadPool.getExecutor().isShutdown());
@@ -248,9 +248,9 @@ public class ThreadPoolTest {
             final int taskId = i;
             threadPool.execute(() -> {
                 // Perform some work
-                long result = 0;
+                long _result = 0;
                 for (int j = 0; j < 10000; j++) {
-                    result += (taskId * j) % 100;
+                    _result += (taskId * j) % 100;
                 }
                 latch.countDown();
             });

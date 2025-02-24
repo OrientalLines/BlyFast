@@ -3,7 +3,6 @@ package com.blyfast.example;
 import com.blyfast.core.Blyfast;
 import com.blyfast.core.ThreadPool;
 
-import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
