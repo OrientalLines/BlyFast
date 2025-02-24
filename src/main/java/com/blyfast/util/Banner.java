@@ -105,30 +105,12 @@ public class Banner {
     
     /**
      * Displays the banner directly to the console.
-     * This method first clears any previous console content to ensure
-     * the banner is displayed cleanly.
      * 
      * @param host host the server is running on
      * @param port port the server is listening on
      */
     public static void display(String host, int port) {
-        // Clear console before displaying banner (attempts to work on both Windows and Unix-like)
-        try {
-            final String os = System.getProperty("os.name");
-            
-            if (os.contains("Windows")) {
-                // For Windows
-                new ProcessBuilder("cmd", "/c", "cls").inheritIO().start().waitFor();
-            } else {
-                // For Unix-like systems
-                System.out.print("\033[H\033[2J"); 
-                System.out.flush();
-            }
-        } catch (Exception e) {
-            // Ignore exceptions if we can't clear the console
-        }
-        
-        // Print the banner
+        // Print the banner without clearing the console
         System.out.println(generate(host, port));
     }
 } 
