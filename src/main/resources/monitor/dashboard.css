@@ -1,0 +1,308 @@
+:root {
+    --primary: #4361ee;
+    --secondary: #3a0ca3;
+    --accent: #4cc9f0;
+    --success: #2ecc71;
+    --warning: #f39c12;
+    --danger: #e74c3c;
+    --light: #f8f9fa;
+    --dark: #212529;
+    --text: #333;
+    --background: #f8f9fa;
+    --card-bg: #fff;
+    --border: #eee;
+    --shadow: rgba(0, 0, 0, 0.1);
+    --chart-grid: rgba(0, 0, 0, 0.05);
+}
+
+[data-theme="dark"] {
+    --primary: #6c8cff;
+    --secondary: #a56eff;
+    --accent: #64e0ff;
+    --success: #39e75f;
+    --warning: #ffb938;
+    --danger: #ff5252;
+    --light: #2d3748;
+    --dark: #1a202c;
+    --text: #e2e8f0;
+    --background: #171923;
+    --card-bg: #252d3d;
+    --border: #3f4758;
+    --shadow: rgba(0, 0, 0, 0.4);
+    --chart-grid: rgba(255, 255, 255, 0.08);
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    color: var(--text);
+    background-color: var(--background);
+    transition: all 0.3s ease;
+    line-height: 1.6;
+    padding: 0;
+}
+
+.container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+.header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 20px;
+    background-color: var(--card-bg);
+    border-radius: 12px;
+    box-shadow: 0 4px 15px var(--shadow);
+    margin-bottom: 30px;
+}
+
+h1 {
+    color: var(--primary);
+    font-size: 28px;
+    font-weight: 600;
+    margin: 0;
+}
+
+.theme-toggle {
+    background: var(--light);
+    border: 2px solid var(--border);
+    border-radius: 30px;
+    padding: 8px 15px;
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    font-size: 14px;
+    color: var(--text);
+}
+
+.theme-toggle i {
+    margin-right: 8px;
+}
+
+.theme-toggle:hover {
+    transform: translateY(-2px);
+}
+
+.dashboard {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+    gap: 25px;
+    margin-bottom: 30px;
+}
+
+.card {
+    background: var(--card-bg);
+    border-radius: 12px;
+    box-shadow: 0 4px 15px var(--shadow);
+    padding: 25px;
+    transition: all 0.3s ease;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+}
+
+.card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 8px 25px var(--shadow);
+}
+
+.card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.card h2 {
+    color: var(--primary);
+    font-size: 20px;
+    font-weight: 600;
+    margin: 0;
+}
+
+.card-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    background: var(--primary);
+    color: white;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+}
+
+.stats-container {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 15px;
+    margin-bottom: 20px;
+}
+
+.stat-box {
+    padding: 15px;
+    border-radius: 8px;
+    background: var(--light);
+    display: flex;
+    flex-direction: column;
+}
+
+.stat-label {
+    font-size: 14px;
+    color: var(--text);
+    opacity: 0.8;
+    margin-bottom: 5px;
+}
+
+.stat-value {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--primary);
+}
+
+.chart-container {
+    flex-grow: 1;
+    position: relative;
+    margin-top: 20px;
+    min-height: 200px;
+}
+
+.table-container {
+    overflow-x: auto;
+    margin-top: 20px;
+    border-radius: 8px;
+    background: var(--card-bg);
+    box-shadow: 0 4px 15px var(--shadow);
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+th, td {
+    text-align: left;
+    padding: 15px;
+    border-bottom: 1px solid var(--border);
+}
+
+th {
+    background-color: var(--light);
+    color: var(--text);
+    font-weight: 600;
+    position: sticky;
+    top: 0;
+}
+
+tr:hover {
+    background-color: var(--light);
+}
+
+.error-count {
+    color: var(--danger);
+    font-weight: bold;
+}
+
+.refresh-info {
+    font-size: 14px;
+    color: var(--text);
+    opacity: 0.7;
+    margin-top: 30px;
+    text-align: center;
+}
+
+.slow-request {
+    background-color: rgba(243, 156, 18, 0.1);
+}
+
+.badge {
+    display: inline-block;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: bold;
+}
+
+.badge-primary { background-color: var(--primary); color: white; }
+.badge-success { background-color: var(--success); color: white; }
+.badge-warning { background-color: var(--warning); color: white; }
+.badge-danger { background-color: var(--danger); color: white; }
+
+.big-number {
+    font-size: 48px;
+    font-weight: 700;
+    color: var(--primary);
+    text-align: center;
+    margin: 20px 0;
+}
+
+.memory-meter {
+    height: 10px;
+    background-color: var(--light);
+    border-radius: 5px;
+    margin-top: 10px;
+    overflow: hidden;
+}
+
+.memory-used {
+    height: 100%;
+    background-color: var(--primary);
+    width: 0%;
+    transition: width 0.5s ease;
+}
+
+@media (max-width: 768px) {
+    .dashboard {
+        grid-template-columns: 1fr;
+    }
+    
+    .stats-container {
+        grid-template-columns: 1fr;
+    }
+}
+
+.header-controls {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.refresh-control {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 14px;
+}
+
+.interval-select {
+    background-color: var(--light);
+    color: var(--text);
+    border: 2px solid var(--border);
+    border-radius: 20px;
+    padding: 6px 10px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23555' d='M6 8.825l-4.5-4.5 1.06-1.06L6 6.705l3.44-3.44 1.06 1.06z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    padding-right: 30px;
+}
+
+.interval-select:hover, .interval-select:focus {
+    border-color: var(--primary);
+    outline: none;
+    transform: translateY(-2px);
+} 

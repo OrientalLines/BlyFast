@@ -1,7 +1,6 @@
 package com.blyfast.plugin.monitor;
 
 import com.blyfast.core.Blyfast;
-import com.blyfast.http.Context;
 import com.blyfast.middleware.Middleware;
 import com.blyfast.plugin.AbstractPlugin;
 import org.slf4j.Logger;
@@ -15,6 +14,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.io.IOException;
 
 /**
  * Plugin that provides application monitoring capabilities.
@@ -39,6 +39,10 @@ public class MonitorPlugin extends AbstractPlugin {
     
     private final long startTime = System.currentTimeMillis();
     
+    private static final String DASHBOARD_HTML_PATH = "/monitor/dashboard.html";
+    private static final String DASHBOARD_CSS_PATH = "/monitor/dashboard.css";
+    private static final String DASHBOARD_JS_PATH = "/monitor/dashboard.js";
+    
     /**
      * Creates a new monitor plugin.
      */
@@ -57,6 +61,23 @@ public class MonitorPlugin extends AbstractPlugin {
         app.get("/monitor/stats", ctx -> {
             ctx.json(getMonitoringData());
         });
+        
+        // Add a monitoring dashboard with HTML visualization
+        app.get("/monitor/dashboard", ctx -> {
+            ctx.type("text/html");
+            ctx.send(generateDashboardHtml());
+        });
+        
+        // Add static resource routes for individual assets
+        app.get("/monitor/dashboard.css", ctx -> {
+            ctx.type("text/css");
+            ctx.send(loadResourceFromClasspath(DASHBOARD_CSS_PATH));
+        });
+        
+        app.get("/monitor/dashboard.js", ctx -> {
+            ctx.type("application/javascript");
+            ctx.send(loadResourceFromClasspath(DASHBOARD_JS_PATH));
+        });
     }
     
     /**
@@ -66,8 +87,14 @@ public class MonitorPlugin extends AbstractPlugin {
      */
     public Middleware monitoringMiddleware() {
         return ctx -> {
-            long requestStartTime = System.currentTimeMillis();
             String path = normalizePath(ctx.request().getPath());
+            
+            // Skip monitoring for monitoring-related endpoints
+            if (path.startsWith("/monitor/")) {
+                return true; // Skip metrics tracking but continue processing
+            }
+            
+            long requestStartTime = System.currentTimeMillis();
             
             // Increment counters
             totalRequests.incrementAndGet();
@@ -112,6 +139,45 @@ public class MonitorPlugin extends AbstractPlugin {
     }
     
     /**
+     * Loads a resource from the classpath.
+     *
+     * @param path the path to the resource
+     * @return the resource content as a string
+     */
+    private String loadResourceFromClasspath(String path) {
+        try (var inputStream = getClass().getResourceAsStream(path)) {
+            if (inputStream == null) {
+                logger.error("Resource not found: {}", path);
+                return "Resource not found: " + path;
+            }
+            return new String(inputStream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
+        } catch (IOException e) {
+            logger.error("Failed to load resource: {}", path, e);
+            return "Error loading resource: " + e.getMessage();
+        }
+    }
+    
+    /**
+     * Generates the HTML for the monitoring dashboard.
+     *
+     * @return the HTML content
+     */
+    private String generateDashboardHtml() {
+        String html = loadResourceFromClasspath(DASHBOARD_HTML_PATH);
+        String css = loadResourceFromClasspath(DASHBOARD_CSS_PATH);
+        String js = loadResourceFromClasspath(DASHBOARD_JS_PATH);
+        
+        // Replace placeholders in the HTML template
+        html = html.replace("<!-- DASHBOARD_CSS_PLACEHOLDER -->", 
+                "<style>\n" + css + "\n</style>");
+        
+        html = html.replace("<!-- DASHBOARD_JS_PLACEHOLDER -->", 
+                "<script>\n" + js + "\n</script>");
+        
+        return html;
+    }
+    
+    /**
      * Gets the monitoring data.
      *
      * @return the monitoring data
@@ -142,6 +208,13 @@ public class MonitorPlugin extends AbstractPlugin {
         jvmStats.put("nonHeapUsed", memoryBean.getNonHeapMemoryUsage().getUsed());
         jvmStats.put("threadCount", Thread.activeCount());
         jvmStats.put("cpuLoad", osBean.getSystemLoadAverage());
+        
+        // Add runtime information using runtimeBean
+        jvmStats.put("jvmName", runtimeBean.getVmName());
+        jvmStats.put("jvmVersion", runtimeBean.getVmVersion());
+        jvmStats.put("jvmVendor", runtimeBean.getVmVendor());
+        jvmStats.put("jvmUptime", runtimeBean.getUptime());
+        jvmStats.put("jvmStartTime", runtimeBean.getStartTime());
         
         data.put("jvm", jvmStats);
         
