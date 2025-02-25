@@ -58,7 +58,6 @@ You can add middleware to your application in several ways:
 // Log all requests
 app.use(ctx -> {
     System.out.println("Request received: " + ctx.request().getMethod() + " " + ctx.request().getPath());
-    return true; // Continue to next middleware
 });
 ```
 
@@ -70,12 +69,10 @@ app.get("/admin", ctx -> {
     String token = ctx.header("Authorization");
     if (token == null || !isValidToken(token)) {
         ctx.status(401).json(Map.of("error", "Unauthorized"));
-        return false; // Stop middleware chain
+        return; // Stop middleware chain
     }
-    return true; // Continue to next middleware
 }, ctx -> {
     ctx.json(Map.of("message", "Admin dashboard"));
-    return true;
 });
 ```
 
@@ -95,12 +92,10 @@ Middleware auth = ctx -> {
 // Use in multiple routes
 app.get("/admin", auth, ctx -> {
     ctx.json(Map.of("message", "Admin dashboard"));
-    return true;
 });
 
 app.get("/profile", auth, ctx -> {
     ctx.json(Map.of("message", "User profile"));
-    return true;
 });
 ```
 
@@ -162,27 +157,33 @@ Plugins are registered with the application and often create middlewares that ar
 
 ```java
 // Create and configure the CORS plugin
-CorsPlugin corsPlugin = new CorsPlugin(new CorsConfig()
-    .setAllowOrigin("https://example.com")
-    .setAllowMethods("GET, POST, PUT, DELETE")
-    .setAllowHeaders("Content-Type, Authorization")
-    .setMaxAge(86400));
+CorsPlugin corsPlugin = new CorsPlugin();
+corsPlugin.getConfig()
+    .addAllowOrigin("https://example.com")
+    .addAllowMethod("GET, POST, PUT, DELETE")
+    .addAllowHeader("Content-Type, Authorization")
+    .setMaxAge(86400);
 
 // Register the plugin
 app.register(corsPlugin);
 
 // JWT Authentication plugin
-JwtPlugin jwtPlugin = new JwtPlugin(new JwtConfig()
-    .setSecret("your-jwt-secret")
-    .setIssuer("blyfast-api"));
+JwtPlugin jwtPlugin = new JwtPlugin("your-secure-jwt-secret-key");
+jwtPlugin.getConfig()
+    .setIssuer("blyfast-api");
 
 app.register(jwtPlugin);
 
 // Protect routes with JWT middleware
-app.get("/protected", jwtPlugin.createMiddleware(), ctx -> {
+Middleware jwtProtect = jwtPlugin.protect();
+app.get("/protected", ctx -> {
+    // Apply JWT middleware
+    if (!jwtProtect.handle(ctx)) {
+        return; // Authentication failed
+    }
+    
     // This route is protected by JWT authentication
     ctx.json(Map.of("message", "Protected route"));
-    return true;
 });
 ```
 
@@ -195,21 +196,27 @@ The Compression plugin provides response compression capabilities:
 CompressionPlugin compressionPlugin = new CompressionPlugin();
 
 // Or with custom configuration
-CompressionPlugin compressionPlugin = new CompressionPlugin(new CompressionConfig()
+CompressionPlugin compressionPlugin = new CompressionPlugin();
+compressionPlugin.getConfig()
     .setEnableGzip(true)
     .setEnableDeflate(false)
     .setMinLength(512)
     .addExcludedPath(".*/images/.*")
-    .addIncludedContentType("application/json"));
+    .addIncludedContentType("application/json");
 
 // Register the plugin
 app.register(compressionPlugin);
 
 // Apply compression to specific routes if global is disabled
-app.get("/api/data", compressionPlugin.createMiddleware(), ctx -> {
+Middleware compressionMiddleware = compressionPlugin.createMiddleware();
+app.get("/api/data", ctx -> {
+    // Apply compression middleware
+    if (!compressionMiddleware.handle(ctx)) {
+        return;
+    }
+    
     // Response will be compressed
     ctx.json(largeDataObject);
-    return true;
 });
 ```
 
@@ -219,11 +226,11 @@ To create a custom plugin, extend the `AbstractPlugin` class:
 
 ```java
 public class MyCustomPlugin extends AbstractPlugin {
-    private final MyCustomConfig config;
+    private MyCustomConfig config;
 
-    public MyCustomPlugin(MyCustomConfig config) {
+    public MyCustomPlugin() {
         super("my-custom-plugin", "1.0.0");
-        this.config = config;
+        this.config = new MyCustomConfig();
     }
 
     @Override
@@ -242,6 +249,10 @@ public class MyCustomPlugin extends AbstractPlugin {
             // Implement your middleware logic here
             return true; // Continue to next middleware
         };
+    }
+    
+    public MyCustomConfig getConfig() {
+        return config;
     }
 
     // Additional methods and inner classes as needed
