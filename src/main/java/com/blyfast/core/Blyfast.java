@@ -264,6 +264,66 @@ public class Blyfast {
     }
 
     /**
+     * Defines a PATCH route.
+     * 
+     * @param path    the route path
+     * @param handler the handler function
+     * @return this instance for method chaining
+     */
+    public Blyfast patch(String path, Handler handler) {
+        router.addRoute("PATCH", path, handler);
+        return this;
+    }
+
+    /**
+     * Defines a HEAD route.
+     * 
+     * @param path    the route path
+     * @param handler the handler function
+     * @return this instance for method chaining
+     */
+    public Blyfast head(String path, Handler handler) {
+        router.addRoute("HEAD", path, handler);
+        return this;
+    }
+
+    /**
+     * Defines an OPTIONS route.
+     * 
+     * @param path    the route path
+     * @param handler the handler function
+     * @return this instance for method chaining
+     */
+    public Blyfast options(String path, Handler handler) {
+        router.addRoute("OPTIONS", path, handler);
+        return this;
+    }
+
+    /**
+     * Defines a TRACE route.
+     * 
+     * @param path    the route path
+     * @param handler the handler function
+     * @return this instance for method chaining
+     */
+    public Blyfast trace(String path, Handler handler) {
+        router.addRoute("TRACE", path, handler);
+        return this;
+    }
+
+    /**
+     * Defines a CONNECT route.
+     * 
+     * @param path    the route path
+     * @param handler the handler function
+     * @return this instance for method chaining
+     */
+    public Blyfast connect(String path, Handler handler) {
+        router.addRoute("CONNECT", path, handler);
+        return this;
+    }
+
+    /**
      * Defines a route with a custom HTTP method.
      * 
      * @param method  the HTTP method
