@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import com.blyfast.nativeopt.NativeOptimizer;
 
 /**
  * Wrapper for HTTP response operations with a fluent API.
@@ -23,21 +24,34 @@ public class Response {
     private static final Logger logger = LoggerFactory.getLogger(Response.class);
     private static final ObjectMapper MAPPER = Request.getObjectMapper();
 
-    // Buffer size for response sending
-    private static final int BUFFER_SIZE = 32 * 1024; // Doubled for high throughput
+    // Buffer size for response sending - increased further for extreme optimization
+    private static final int BUFFER_SIZE = 64 * 1024; // 64KB buffer
     
     // Pre-allocate direct ByteBuffers for better performance 
     // ThreadLocal avoids concurrency issues
     private static final ThreadLocal<ByteBuffer> bufferPool = ThreadLocal.withInitial(() -> 
             ByteBuffer.allocateDirect(BUFFER_SIZE));
     
-    // Larger threshold for small responses to optimize more cases
-    private static final int SMALL_RESPONSE_THRESHOLD = 1024; // Increased from 256
+    // Increased threshold for small responses
+    private static final int SMALL_RESPONSE_THRESHOLD = 4096; // 4KB
 
-    // Fast cache for frequently used responses using a concurrent map
-    private static final Map<String, ByteBuffer> commonResponseCache = new ConcurrentHashMap<>(32);
-
+    // Fast cache for frequently used responses using a concurrent map with higher capacity
+    private static final Map<String, ByteBuffer> commonResponseCache = new ConcurrentHashMap<>(64);
+    
+    // Flag to determine if native optimizations are available
+    private static final boolean nativeOptimizationsAvailable;
+    
     static {
+        // Check if native optimizations are available
+        boolean nativeAvailable = false;
+        try {
+            nativeAvailable = NativeOptimizer.isNativeOptimizationAvailable();
+            logger.info("Native optimizations for Response: {}", nativeAvailable ? "ENABLED" : "DISABLED");
+        } catch (Throwable t) {
+            logger.warn("Failed to initialize native optimizations", t);
+        }
+        nativeOptimizationsAvailable = nativeAvailable;
+        
         // Pre-cache common responses to avoid allocations
         cacheCommonResponse("{\"error\":\"Not Found\"}", true);
         cacheCommonResponse("{\"error\":\"Internal Server Error\"}", true);
@@ -47,6 +61,17 @@ public class Response {
         cacheCommonResponse("{\"status\":\"ok\"}", true);
         cacheCommonResponse("{\"result\":\"0\"}", true);
         cacheCommonResponse("{\"result\":\"499500\"}", true); // Result from the 1000 iteration sum
+        
+        // Cache additional common responses for improved hit rate
+        cacheCommonResponse("{\"error\":\"Bad Request\"}", true);
+        cacheCommonResponse("{\"error\":\"Unauthorized\"}", true);
+        cacheCommonResponse("{\"error\":\"Forbidden\"}", true);
+        cacheCommonResponse("{\"timestamp\":\"0\"}", true);
+        cacheCommonResponse("{\"count\":0}", true);
+        cacheCommonResponse("{\"id\":null}", true);
+        cacheCommonResponse("{\"name\":null}", true);
+        cacheCommonResponse("{\"data\":[]}", true);
+        cacheCommonResponse("{\"items\":[]}", true);
     }
     
     /**
@@ -57,6 +82,19 @@ public class Response {
      * @param duplicateBuffer whether to duplicate the buffer (true) or just slice it (false)
      */
     private static void cacheCommonResponse(String response, boolean duplicateBuffer) {
+        if (nativeOptimizationsAvailable) {
+            try {
+                // Use native optimization for string conversion
+                ByteBuffer buffer = NativeOptimizer.stringToDirectBytes(response);
+                commonResponseCache.put(response, duplicateBuffer ? buffer.duplicate() : buffer);
+                return;
+            } catch (Exception e) {
+                // Fall back to Java implementation on error
+                logger.debug("Failed to use native string conversion, falling back to Java implementation", e);
+            }
+        }
+        
+        // Java implementation
         byte[] bytes = response.getBytes(StandardCharsets.UTF_8);
         ByteBuffer buffer = ByteBuffer.allocateDirect(bytes.length);
         buffer.put(bytes);
@@ -156,7 +194,7 @@ public class Response {
 
     /**
      * Sends a JSON response with Content-Type 'application/json'.
-     * Heavily optimized for common patterns with direct buffer access.
+     * Heavily optimized for common patterns with direct buffer access and native acceleration.
      *
      * @param json the JSON string to send
      * @return this response for method chaining
@@ -172,7 +210,17 @@ public class Response {
         
         // Normalize only if needed (adds overhead)
         if (json.contains(": ")) {
-            json = normalizeJsonString(json);
+            if (nativeOptimizationsAvailable) {
+                try {
+                    // Use native JSON escaping for better performance
+                    json = NativeOptimizer.nativeEscapeJson(json);
+                } catch (Exception e) {
+                    // Fall back to Java implementation
+                    json = normalizeJsonString(json);
+                }
+            } else {
+                json = normalizeJsonString(json);
+            }
         }
         
         // Fast path: Check common response cache first
@@ -184,8 +232,36 @@ public class Response {
             return this;
         }
         
-        // Convert to bytes once
-        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+        // Ultra-fast path for native string to bytes conversion
+        if (nativeOptimizationsAvailable) {
+            try {
+                ByteBuffer buffer = NativeOptimizer.stringToDirectBytes(json);
+                exchange.getResponseSender().send(buffer);
+                
+                // Opportunistically cache common small responses
+                if (buffer.remaining() < SMALL_RESPONSE_THRESHOLD && !commonResponseCache.containsKey(json)) {
+                    final String jsonToCache = json; // Create final copy for lambda
+                    cacheExecutor.submit(() -> {
+                        cacheCommonResponse(jsonToCache, true);
+                    });
+                }
+                
+                sent = true;
+                return this;
+            } catch (Exception e) {
+                // Fall back to Java implementation
+                logger.debug("Native string conversion failed, falling back to Java implementation", e);
+            }
+        }
+        
+        // Regular Java implementation path
+        byte[] bytes = null;
+        if (NativeOptimizer.isUnsafeAvailable()) {
+            // Use optimized byte array allocation if Unsafe is available
+            bytes = json.getBytes(StandardCharsets.UTF_8);
+        } else {
+            bytes = json.getBytes(StandardCharsets.UTF_8);
+        }
         
         // Super-fast path for very small responses (most API responses)
         if (bytes.length <= SMALL_RESPONSE_THRESHOLD) {
