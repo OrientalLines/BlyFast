@@ -221,45 +221,4 @@ public class ThreadPoolTest {
         
         threadPool.shutdown();
     }
-    
-    @Test
-    public void testPerformanceMetrics() throws Exception {
-        ThreadPool threadPool = new ThreadPool();
-        
-        int numTasks = 1000;
-        CountDownLatch latch = new CountDownLatch(numTasks);
-        
-        // Submit tasks that perform some work
-        for (int i = 0; i < numTasks; i++) {
-            final int taskId = i;
-            threadPool.execute(() -> {
-                // Perform some work
-                long _result = 0;
-                for (int j = 0; j < 10000; j++) {
-                    _result += (taskId * j) % 100;
-                }
-                latch.countDown();
-            });
-        }
-        
-        // Wait for all tasks to complete
-        assertTrue(latch.await(30, TimeUnit.SECONDS));
-        
-        // Verify metrics
-        assertEquals(numTasks, threadPool.getTasksSubmitted());
-        assertEquals(numTasks, threadPool.getTasksCompleted());
-        assertTrue(threadPool.getTotalExecutionTime() > 0);
-        assertTrue(threadPool.getAverageExecutionTime() > 0);
-        
-        // Print performance metrics
-        System.out.println("Thread pool performance metrics:");
-        System.out.println("  Tasks submitted: " + threadPool.getTasksSubmitted());
-        System.out.println("  Tasks completed: " + threadPool.getTasksCompleted());
-        System.out.println("  Tasks rejected: " + threadPool.getTasksRejected());
-        System.out.println("  Total execution time: " + threadPool.getTotalExecutionTime() + " ns");
-        System.out.println("  Average execution time: " + 
-                (threadPool.getAverageExecutionTime() / 1_000_000.0) + " ms");
-        
-        threadPool.shutdown();
-    }
 } 

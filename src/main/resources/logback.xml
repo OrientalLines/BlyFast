@@ -1,22 +1,31 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration>
-    <!-- Console appender -->
+    <!-- Console appender with minimal output -->
     <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
         <encoder>
-            <pattern>%d{HH:mm:ss.SSS} %highlight(%level) %magenta([%thread]) %cyan(%logger{36}) - %msg%n</pattern>
+            <pattern>%d{HH:mm:ss} %magenta([%thread]) %highlight(%-5level) %cyan(%-30logger{30}) - %msg%n</pattern>
         </encoder>
     </appender>
-
-    <!-- Application logs -->
-    <logger name="com.blyfast" level="INFO" />
     
-    <!-- Third-party libraries - set to WARN or higher to reduce noise -->
-    <logger name="io.undertow" level="WARN" />
-    <logger name="org.xnio" level="WARN" />
-    <logger name="org.jboss" level="WARN" />
-    
-    <!-- Root logger - set to WARN to reduce overall noise -->
-    <root level="WARN">
+    <!-- Async appender to reduce logging overhead -->
+    <appender name="ASYNC" class="ch.qos.logback.classic.AsyncAppender">
         <appender-ref ref="CONSOLE" />
+        <queueSize>1024</queueSize>
+        <discardingThreshold>0</discardingThreshold>
+        <includeCallerData>false</includeCallerData>
+        <neverBlock>true</neverBlock>
+    </appender>
+
+    <!-- Application logs - error only for extreme performance -->
+    <logger name="com.blyfast" level="ERROR" />
+    
+    <!-- Third-party libraries - error only to eliminate overhead -->
+    <logger name="io.undertow" level="ERROR" />
+    <logger name="org.xnio" level="ERROR" />
+    <logger name="org.jboss" level="ERROR" />
+    
+    <!-- Root logger - error only for maximum performance -->
+    <root level="ERROR">
+        <appender-ref ref="ASYNC" />
     </root>
 </configuration> 

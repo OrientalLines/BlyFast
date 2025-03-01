@@ -541,33 +541,55 @@ public class Blyfast {
 
         HttpHandler handler = new BlyFastHttpHandler();
         
-        // Calculate optimal thread counts for IO and worker threads
-        int ioThreads = Math.max(2, Runtime.getRuntime().availableProcessors() / 2);
+        // Calculate optimal thread counts for IO and worker threads - extreme optimization
+        int availableProcessors = Runtime.getRuntime().availableProcessors();
+        int ioThreads = Math.max(4, availableProcessors * 4);  // Quadrupled for extreme throughput
         int workerThreads = threadPool.getConfig().getMaxPoolSize();
         
-        // Build an optimized Undertow server
+        // Build an extremely optimized Undertow server
         server = Undertow.builder()
                 .addHttpListener(port, host)
                 .setHandler(handler)
-                // Optimize IO threads (for network operations)
+                // Extreme IO thread optimization for network operations
                 .setIoThreads(ioThreads)
-                // Set worker threads (for request processing)
+                // Worker threads from thread pool configuration
                 .setWorkerThreads(workerThreads)
-                // Configure buffer pool for improved throughput
-                .setBufferSize(16 * 1024)
-                // Enable HTTP/2 for improved performance where supported
+                // Maximize buffer pool for highest possible throughput
+                .setBufferSize(64 * 1024)  // Doubled buffer size for extreme throughput
+                .setDirectBuffers(true)    // Use direct buffers for best performance
+                // Enable HTTP/2 support
                 .setServerOption(UndertowOptions.ENABLE_HTTP2, true)
-                // Optimize socket options
+                // Extreme socket optimizations
                 .setSocketOption(Options.TCP_NODELAY, true)
-                .setSocketOption(Options.BACKLOG, 10000)
-                // Optimize connection handling
+                .setSocketOption(Options.BACKLOG, 50000)  // Dramatically increased connection backlog
+                .setSocketOption(Options.REUSE_ADDRESSES, true)
+                .setSocketOption(Options.CORK, true)
+                .setSocketOption(Options.KEEP_ALIVE, true) // Keep TCP connections alive
+                // Connection pooling settings
+                .setServerOption(UndertowOptions.MAX_ENTITY_SIZE, 4 * 1024 * 1024L)  // 4MB max request size
+                // Advanced connection handling optimizations
                 .setServerOption(UndertowOptions.ALWAYS_SET_KEEP_ALIVE, true)
                 .setServerOption(UndertowOptions.ALWAYS_SET_DATE, true)
                 .setServerOption(UndertowOptions.RECORD_REQUEST_START_TIME, false)
+                .setServerOption(UndertowOptions.MAX_CONCURRENT_REQUESTS_PER_CONNECTION, 200) // Doubled
+                .setServerOption(UndertowOptions.NO_REQUEST_TIMEOUT, 30 * 1000) // 30 seconds timeout (reduced)
+                .setServerOption(UndertowOptions.IDLE_TIMEOUT, 60 * 1000) // 60 second idle timeout
+                // Performance-focused settings
+                .setServerOption(UndertowOptions.MAX_CACHED_HEADER_SIZE, 1024)
+                .setServerOption(UndertowOptions.MAX_HEADERS, 200)
+                .setServerOption(UndertowOptions.MAX_PARAMETERS, 2000)
+                .setServerOption(UndertowOptions.MAX_COOKIES, 200)
+                .setServerOption(UndertowOptions.ENABLE_CONNECTOR_STATISTICS, false) // Disable statistics for performance
                 .build();
 
+        // Set system properties for extreme performance
+        System.setProperty("org.xnio.nio.WRITE_TIMEOUT", "30000"); // 30 second write timeout
+        System.setProperty("io.undertow.disable-body-buffer-reuse", "false"); // Enable buffer reuse
+        System.setProperty("io.undertow.server.max-entity-workers", String.valueOf(availableProcessors * 8)); // More entity workers
+
         server.start();
-        logger.info(LogUtil.info("BlyFast server started with IO threads: " + ioThreads + ", worker threads: " + workerThreads));
+        logger.info(LogUtil.info(ConsoleColors.GREEN_BOLD + "BlyFast server started in EXTREME PERFORMANCE MODE" + ConsoleColors.RESET));
+        logger.info(LogUtil.info("IO threads: " + ioThreads + ", worker threads: " + workerThreads + ", buffer size: 64KB"));
         
         if (callback != null) {
             callback.run();
@@ -691,32 +713,82 @@ public class Blyfast {
      * Internal HTTP handler that processes all incoming requests.
      */
     private class BlyFastHttpHandler implements HttpHandler {
+        // Pre-compile frequently used constants for less overhead at runtime
+        private static final String GET_METHOD = "GET";
+        private static final String HEAD_METHOD = "HEAD";
+        
+        // Track frequently accessed routes for optimization
+        private final Map<String, Route> fastRouteCache = new ConcurrentHashMap<>();
+        private final AtomicInteger routeHits = new AtomicInteger(0);
+        private final AtomicInteger routeMisses = new AtomicInteger(0);
+        
         @Override
         public void handleRequest(HttpServerExchange exchange) throws Exception {
-            // Fast path for health checks and static resources
             String path = exchange.getRequestPath();
-            if (path.equals("/health") || path.equals("/ping")) {
-                exchange.setStatusCode(200);
-                exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "application/json");
-                exchange.getResponseSender().send("{\"status\":\"ok\"}");
-                return;
-            }
+            String method = exchange.getRequestMethod().toString();
             
-            if (exchange.isInIoThread()) {
-                // Only dispatch if we need to do blocking operations
-                if (exchange.getRequestMethod().toString().equals("GET") 
-                    && !hasBodyConsumingMiddleware()) {
-                    // Process non-blocking GET requests directly in IO thread
+            // Ultra-fast path for GET/HEAD requests to common endpoints
+            if ((GET_METHOD.equals(method) || HEAD_METHOD.equals(method)) && 
+                    exchange.isInIoThread() && !hasBodyConsumingMiddleware()) {
+                
+                // Common health checks - absolute fastest path
+                if ("/health".equals(path) || "/ping".equals(path) || "/status".equals(path)) {
+                    exchange.setStatusCode(200);
+                    exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "application/json");
+                    exchange.getResponseSender().send("{\"status\":\"ok\"}");
+                    return;
+                }
+
+                // Fast cached route lookup using path+method as key
+                String cacheKey = method + "|" + path;
+                Route route = fastRouteCache.get(cacheKey);
+                
+                if (route != null) {
+                    // Hit the fast route cache
+                    routeHits.incrementAndGet();
+                    
+                    // Process directly in IO thread for maximum performance
                     try {
-                        fastPathProcessing(exchange);
+                        ultraFastPathProcessing(exchange, route, path);
+                        return;
                     } catch (Exception e) {
-                        recordFailure();
-                        handleError(exchange, e);
+                        // Fall back to normal processing if fast path fails
+                        logger.debug("Fast path failed, falling back to normal processing", e);
                     }
                 } else {
-                    // Dispatch to worker thread for requests that may block
-                    exchange.dispatch(this);
+                    routeMisses.incrementAndGet();
+                    
+                    // Try to find the route
+                    route = router.findRoute(method, path);
+                    if (route != null && route.getMiddleware().isEmpty()) {
+                        // Cache this route for future requests if it doesn't have middleware
+                        fastRouteCache.put(cacheKey, route);
+                        
+                        // Try the fast path
+                        try {
+                            ultraFastPathProcessing(exchange, route, path);
+                            return;
+                        } catch (Exception e) {
+                            // Fall back to normal processing
+                            logger.debug("Fast path failed, falling back to normal processing", e);
+                        }
+                    }
                 }
+                
+                // Traditional fast path for GET requests without middleware
+                try {
+                    processSimpleRequest(exchange);
+                    return;
+                } catch (Exception e) {
+                    recordFailure();
+                    handleError(exchange, e);
+                    return;
+                }
+            }
+            
+            // Standard path for non-GET or requests that need blocking I/O
+            if (exchange.isInIoThread()) {
+                exchange.dispatch(this);
                 return;
             }
 
@@ -735,7 +807,7 @@ public class Blyfast {
                     exchange.startBlocking();
                 }
 
-                // Process the request directly, not in a separate thread
+                // Process the request directly
                 processRequest(exchange);
 
                 // Record successful request
@@ -746,19 +818,51 @@ public class Blyfast {
                     exchange.endExchange();
                 }
             } catch (Exception e) {
-                // Record failure for circuit breaker
                 recordFailure();
                 handleError(exchange, e);
             }
         }
         
         /**
-         * Fast path processing for simple requests that don't need blocking operations.
+         * Ultra-fast path processing that skips almost all checks and overhead.
+         * This is the absolute fastest path for simple GET requests to known routes.
+         * 
+         * @param exchange the HTTP exchange
+         * @param route the pre-resolved route
+         * @param path the request path
+         */
+        private void ultraFastPathProcessing(HttpServerExchange exchange, Route route, String path) throws Exception {
+            // Direct handler execution for absolute maximum performance
+            // This avoids almost all allocations and processing overhead
+            String routePath = route.getPath();
+            if (!routePath.contains(":") && !routePath.contains("{") && !routePath.contains("*")) {
+                // No path parameters, so we can execute directly
+                Request request = getRequest(exchange);
+                Response response = getResponse(exchange);
+                Context context = getContext(request, response);
+                
+                try {
+                    // Execute handler directly
+                    route.getHandler().handle(context);
+                } finally {
+                    // Always recycle objects to avoid leaks
+                    recycleObjects(context, request, response);
+                }
+                return;
+            }
+            
+            // If we have path parameters, use the regular fast path
+            // which handles parameter extraction
+            throw new IllegalStateException("Route has path parameters, cannot use ultra-fast path");
+        }
+        
+        /**
+         * Process simple requests that don't need blocking operations.
          * This method is optimized for speed and runs directly in IO threads.
          * 
          * @param exchange the HTTP exchange
          */
-        private void fastPathProcessing(HttpServerExchange exchange) throws Exception {
+        private void processSimpleRequest(HttpServerExchange exchange) throws Exception {
             // Create request and response objects (without blocking operations)
             Request request = getRequest(exchange);
             Response response = getResponse(exchange);
