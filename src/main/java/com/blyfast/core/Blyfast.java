@@ -26,7 +26,6 @@ import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.*;
-import java.util.function.Consumer;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.LongAdder;
@@ -579,7 +578,6 @@ public class Blyfast {
                 .setServerOption(UndertowOptions.MAX_HEADERS, 200)
                 .setServerOption(UndertowOptions.MAX_PARAMETERS, 2000)
                 .setServerOption(UndertowOptions.MAX_COOKIES, 200)
-                .setServerOption(UndertowOptions.ENABLE_CONNECTOR_STATISTICS, false) // Disable statistics for performance
                 .build();
 
         // Set system properties for extreme performance

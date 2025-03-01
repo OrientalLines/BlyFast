@@ -235,8 +235,8 @@ public class NativeOptimizer {
      */
     public static void unsafeCopyMemory(byte[] src, int srcPos, byte[] dest, int destPos, int length) {
         if (UNSAFE_AVAILABLE.get()) {
-            long srcOffset = UNSAFE.ARRAY_BYTE_BASE_OFFSET + srcPos;
-            long destOffset = UNSAFE.ARRAY_BYTE_BASE_OFFSET + destPos;
+            long srcOffset = Unsafe.ARRAY_BYTE_BASE_OFFSET + srcPos;
+            long destOffset = Unsafe.ARRAY_BYTE_BASE_OFFSET + destPos;
             UNSAFE.copyMemory(src, srcOffset, dest, destOffset, length);
         } else {
             // Fallback to System.arraycopy
