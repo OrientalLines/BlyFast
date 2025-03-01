@@ -13,6 +13,9 @@ import com.blyfast.util.LogUtil;
 import io.undertow.Undertow;
 import io.undertow.server.HttpHandler;
 import io.undertow.server.HttpServerExchange;
+import io.undertow.UndertowOptions;
+import io.undertow.util.Headers;
+import org.xnio.Options;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -537,14 +540,35 @@ public class Blyfast {
         }
 
         HttpHandler handler = new BlyFastHttpHandler();
+        
+        // Calculate optimal thread counts for IO and worker threads
+        int ioThreads = Math.max(2, Runtime.getRuntime().availableProcessors() / 2);
+        int workerThreads = threadPool.getConfig().getMaxPoolSize();
+        
+        // Build an optimized Undertow server
         server = Undertow.builder()
                 .addHttpListener(port, host)
                 .setHandler(handler)
-                .setWorkerThreads(threadPool.getConfig().getMaxPoolSize()) // Set Undertow worker threads to match our
-                                                                           // thread pool
+                // Optimize IO threads (for network operations)
+                .setIoThreads(ioThreads)
+                // Set worker threads (for request processing)
+                .setWorkerThreads(workerThreads)
+                // Configure buffer pool for improved throughput
+                .setBufferSize(16 * 1024)
+                // Enable HTTP/2 for improved performance where supported
+                .setServerOption(UndertowOptions.ENABLE_HTTP2, true)
+                // Optimize socket options
+                .setSocketOption(Options.TCP_NODELAY, true)
+                .setSocketOption(Options.BACKLOG, 10000)
+                // Optimize connection handling
+                .setServerOption(UndertowOptions.ALWAYS_SET_KEEP_ALIVE, true)
+                .setServerOption(UndertowOptions.ALWAYS_SET_DATE, true)
+                .setServerOption(UndertowOptions.RECORD_REQUEST_START_TIME, false)
                 .build();
 
         server.start();
+        logger.info(LogUtil.info("BlyFast server started with IO threads: " + ioThreads + ", worker threads: " + workerThreads));
+        
         if (callback != null) {
             callback.run();
         }
@@ -669,9 +693,30 @@ public class Blyfast {
     private class BlyFastHttpHandler implements HttpHandler {
         @Override
         public void handleRequest(HttpServerExchange exchange) throws Exception {
+            // Fast path for health checks and static resources
+            String path = exchange.getRequestPath();
+            if (path.equals("/health") || path.equals("/ping")) {
+                exchange.setStatusCode(200);
+                exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "application/json");
+                exchange.getResponseSender().send("{\"status\":\"ok\"}");
+                return;
+            }
+            
             if (exchange.isInIoThread()) {
-                // Dispatch to worker thread
-                exchange.dispatch(this);
+                // Only dispatch if we need to do blocking operations
+                if (exchange.getRequestMethod().toString().equals("GET") 
+                    && !hasBodyConsumingMiddleware()) {
+                    // Process non-blocking GET requests directly in IO thread
+                    try {
+                        fastPathProcessing(exchange);
+                    } catch (Exception e) {
+                        recordFailure();
+                        handleError(exchange, e);
+                    }
+                } else {
+                    // Dispatch to worker thread for requests that may block
+                    exchange.dispatch(this);
+                }
                 return;
             }
 
@@ -703,16 +748,69 @@ public class Blyfast {
             } catch (Exception e) {
                 // Record failure for circuit breaker
                 recordFailure();
-                
-                logger.error(LogUtil.error("Error processing request: " + e.getMessage()), e);
-                try {
-                    exchange.setStatusCode(500);
-                    exchange.getResponseSender().send("{\"error\": \"Internal Server Error\"}");
-                    exchange.endExchange();
-                } catch (Exception ex) {
-                    logger.error(LogUtil.error("Error sending error response: " + ex.getMessage()), ex);
-                }
+                handleError(exchange, e);
             }
+        }
+        
+        /**
+         * Fast path processing for simple requests that don't need blocking operations.
+         * This method is optimized for speed and runs directly in IO threads.
+         * 
+         * @param exchange the HTTP exchange
+         */
+        private void fastPathProcessing(HttpServerExchange exchange) throws Exception {
+            // Create request and response objects (without blocking operations)
+            Request request = getRequest(exchange);
+            Response response = getResponse(exchange);
+            Context context = getContext(request, response);
+            
+            // Find route (avoid full middleware processing for the fast path)
+            String method = request.getMethod();
+            String path = request.getPath();
+            Route route = router.findRoute(method, path);
+            
+            if (route != null) {
+                // Extract path parameters
+                router.resolveParams(request, route);
+                
+                // Execute handler directly
+                try {
+                    route.getHandler().handle(context);
+                    recordSuccess();
+                } catch (Exception e) {
+                    recordFailure();
+                    throw e;
+                } finally {
+                    recycleObjects(context, request, response);
+                }
+            } else {
+                // No route found - return 404
+                response.status(404).json("{\"error\": \"Not Found\"}");
+                recycleObjects(context, request, response);
+            }
+        }
+        
+        /**
+         * Handles error responses consistently
+         */
+        private void handleError(HttpServerExchange exchange, Exception e) {
+            logger.error(LogUtil.error("Error processing request: " + e.getMessage()), e);
+            try {
+                exchange.setStatusCode(500);
+                exchange.getResponseSender().send("{\"error\": \"Internal Server Error\"}");
+                exchange.endExchange();
+            } catch (Exception ex) {
+                logger.error(LogUtil.error("Error sending error response: " + ex.getMessage()), ex);
+            }
+        }
+        
+        /**
+         * Determines if any middleware is registered that might consume the request body
+         */
+        private boolean hasBodyConsumingMiddleware() {
+            // This is a simple implementation - we could enhance this with more 
+            // sophisticated detection of body-consuming middleware
+            return !globalMiddleware.isEmpty();
         }
 
         /**

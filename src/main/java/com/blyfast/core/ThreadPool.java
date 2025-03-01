@@ -485,31 +485,31 @@ public class ThreadPool {
      * Configuration for the thread pool.
      */
     public static class ThreadPoolConfig {
-        // Thread pool sizing
-        private int corePoolSize = Runtime.getRuntime().availableProcessors() * 4;
-        private int maxPoolSize = Runtime.getRuntime().availableProcessors() * 8;
-        private int queueCapacity = 100000;
-        private Duration keepAliveTime = Duration.ofSeconds(60);
+        // Thread pool sizing - updated defaults based on performance testing
+        private int corePoolSize = Runtime.getRuntime().availableProcessors() * 8; // Doubled from 4x
+        private int maxPoolSize = Runtime.getRuntime().availableProcessors() * 16; // Doubled from 8x
+        private int queueCapacity = 200000; // Doubled from 100000
+        private Duration keepAliveTime = Duration.ofSeconds(30); // Reduced from 60 seconds
 
         // Thread configuration
         private int threadPriority = Thread.NORM_PRIORITY;
         private boolean daemonThreads = true;
 
         // Pool behavior
-        private boolean allowCoreThreadTimeout = true;
+        private boolean allowCoreThreadTimeout = false; // Changed to keep core threads alive
         private boolean prestartCoreThreads = true;
         private boolean useSynchronousQueue = false;
-        private boolean useWorkStealing = true;
+        private boolean useWorkStealing = false; // Disabled by default as it can be less predictable
         private boolean callerRunsWhenRejected = true;
         
         // Dynamic scaling
         private boolean enableDynamicScaling = true;
-        private double targetUtilization = 0.75;
-        private int scalingCheckIntervalMs = 5000;
+        private double targetUtilization = 0.85; // Increased from 0.75
+        private int scalingCheckIntervalMs = 2000; // Reduced from 5000
         
         // Adaptive queue behavior
         private boolean useAdaptiveQueue = true;
-        private int adaptiveQueueCheckIntervalMs = 1000;
+        private int adaptiveQueueCheckIntervalMs = 500; // Reduced from 1000
 
         // Metrics
         private boolean collectMetrics = true;

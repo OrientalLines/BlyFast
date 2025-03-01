@@ -21,7 +21,7 @@ public class Response {
     private static final ObjectMapper MAPPER = Request.getObjectMapper();
 
     // Buffer size for response sending
-    private static final int BUFFER_SIZE = 8192;
+    private static final int BUFFER_SIZE = 16384;
     
     // Reusable ByteBuffer for sending responses
     private static final ThreadLocal<ByteBuffer> bufferPool = ThreadLocal.withInitial(() -> ByteBuffer.allocateDirect(BUFFER_SIZE));
@@ -29,12 +29,17 @@ public class Response {
     // Common string ByteBuffers for frequent responses
     private static final Map<String, ByteBuffer> commonResponseCache = new HashMap<>();
     
+    // Threshold for small responses
+    private static final int SMALL_RESPONSE_THRESHOLD = 256;
+    
     static {
         // Pre-cache common responses
         cacheCommonResponse("{\"error\":\"Not Found\"}", false);
         cacheCommonResponse("{\"error\":\"Internal Server Error\"}", false);
         cacheCommonResponse("{\"success\":true}", false);
         cacheCommonResponse("{\"success\":false}", false);
+        cacheCommonResponse("{\"message\":\"Hello, World!\"}", false);
+        cacheCommonResponse("{\"status\":\"ok\"}", false);
     }
     
     /**
@@ -164,22 +169,31 @@ public class Response {
         ByteBuffer cachedBuffer = commonResponseCache.get(json);
         if (cachedBuffer != null) {
             exchange.getResponseSender().send(cachedBuffer.duplicate());
+            sent = true;
+            return this;
+        }
+        
+        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
+        
+        // For very small responses, use a more direct approach
+        if (bytes.length <= SMALL_RESPONSE_THRESHOLD) {
+            exchange.getResponseSender().send(ByteBuffer.wrap(bytes));
+            sent = true;
+            return this;
+        }
+        
+        // Get a buffer from the pool
+        ByteBuffer buffer = bufferPool.get();
+        buffer.clear();
+        
+        // If json fits in buffer, use it directly
+        if (bytes.length <= buffer.capacity()) {
+            buffer.put(bytes);
+            buffer.flip();
+            exchange.getResponseSender().send(buffer);
         } else {
-            // Get a buffer from the pool
-            ByteBuffer buffer = bufferPool.get();
-            buffer.clear();
-            
-            byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
-            
-            // If json fits in buffer, use it directly
-            if (bytes.length <= buffer.capacity()) {
-                buffer.put(bytes);
-                buffer.flip();
-                exchange.getResponseSender().send(buffer);
-            } else {
-                // For large responses, use a new buffer
-                exchange.getResponseSender().send(ByteBuffer.wrap(bytes));
-            }
+            // For very large responses, use a new buffer
+            exchange.getResponseSender().send(ByteBuffer.wrap(bytes));
         }
         
         sent = true;
