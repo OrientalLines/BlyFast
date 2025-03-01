@@ -29,6 +29,21 @@ public class Context {
     }
 
     /**
+     * Creates a new context with the given request, response, and application locals.
+     *
+     * @param request  the HTTP request
+     * @param response the HTTP response
+     * @param appLocals the application locals
+     */
+    public Context(Request request, Response response, Map<String, Object> appLocals) {
+        this.request = request;
+        this.response = response;
+        if (appLocals != null) {
+            this.locals.putAll(appLocals);
+        }
+    }
+
+    /**
      * Gets the request object.
      *
      * @return the request
@@ -291,17 +306,32 @@ public class Context {
     }
 
     /**
-     * Resets this context instance for reuse with new request and response objects.
-     * Used for object pooling to minimize garbage collection.
+     * Resets this context with new request and response objects.
+     * Used for object pooling.
      *
-     * @param request the new request object
-     * @param response the new response object
-     * @return this instance for method chaining
+     * @param request  the new request
+     * @param response the new response
      */
-    public Context reset(Request request, Response response) {
+    public void reset(Request request, Response response) {
         this.request = request;
         this.response = response;
         this.locals.clear();
-        return this;
+    }
+
+    /**
+     * Resets this context with new request, response, and application locals.
+     * Used for object pooling.
+     *
+     * @param request  the new request
+     * @param response the new response
+     * @param appLocals the application locals
+     */
+    public void reset(Request request, Response response, Map<String, Object> appLocals) {
+        this.request = request;
+        this.response = response;
+        this.locals.clear();
+        if (appLocals != null) {
+            this.locals.putAll(appLocals);
+        }
     }
 }

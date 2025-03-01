@@ -52,6 +52,12 @@ public class ThreadPool {
             // Work-stealing pool doesn't use a queue in the same way
             this.executor = Executors.newWorkStealingPool(config.getCorePoolSize());
             logger.info("Created work-stealing thread pool with parallelism level: {}", config.getCorePoolSize());
+            
+            // Start dynamic scaling monitor if enabled
+            if (config.isEnableDynamicScaling()) {
+                startDynamicScalingMonitor();
+            }
+            
             return;
         } else if (config.isUseSynchronousQueue()) {
             // Synchronous handoff - no queueing, immediate handoff to a thread or rejection
@@ -115,6 +121,166 @@ public class ThreadPool {
 
         logger.info("Created thread pool with core size: {}, max size: {}, queue capacity: {}",
                 config.getCorePoolSize(), config.getMaxPoolSize(), config.getQueueCapacity());
+                
+        // Start dynamic scaling and adaptive queue monitors if enabled
+        if (config.isEnableDynamicScaling() || config.isUseAdaptiveQueue()) {
+            startMonitors();
+        }
+    }
+
+    /**
+     * Starts the dynamic scaling and adaptive queue monitors if they are enabled in the configuration.
+     */
+    private void startMonitors() {
+        if (executor instanceof ThreadPoolExecutor) {
+            final ThreadPoolExecutor threadPoolExecutor = (ThreadPoolExecutor) executor;
+            
+            // Use a single daemon thread for monitoring
+            Thread monitorThread = new Thread(() -> {
+                try {
+                    while (!Thread.currentThread().isInterrupted() && !threadPoolExecutor.isShutdown()) {
+                        try {
+                            // Dynamic scaling
+                            if (config.isEnableDynamicScaling()) {
+                                adjustThreadPoolSize(threadPoolExecutor);
+                            }
+                            
+                            // Adaptive queue
+                            if (config.isUseAdaptiveQueue()) {
+                                adjustQueueCapacity(threadPoolExecutor);
+                            }
+                            
+                            // Sleep for the minimum interval between checks
+                            Thread.sleep(Math.min(
+                                config.getScalingCheckIntervalMs(), 
+                                config.getAdaptiveQueueCheckIntervalMs()));
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
+                            break;
+                        } catch (Exception e) {
+                            logger.error("Error in thread pool monitor", e);
+                        }
+                    }
+                } catch (Exception e) {
+                    logger.error("Thread pool monitor terminated with exception", e);
+                }
+            }, "thread-pool-monitor");
+            
+            monitorThread.setDaemon(true);
+            monitorThread.start();
+            
+            logger.info("Started thread pool monitoring with dynamic scaling={}, adaptive queue={}", 
+                    config.isEnableDynamicScaling(), config.isUseAdaptiveQueue());
+        }
+    }
+    
+    /**
+     * Adjusts the thread pool size based on current utilization.
+     * 
+     * @param threadPoolExecutor the thread pool executor
+     */
+    private void adjustThreadPoolSize(ThreadPoolExecutor threadPoolExecutor) {
+        int activeCount = threadPoolExecutor.getActiveCount();
+        int currentPoolSize = threadPoolExecutor.getPoolSize();
+        int corePoolSize = threadPoolExecutor.getCorePoolSize();
+        int maxPoolSize = threadPoolExecutor.getMaximumPoolSize();
+        
+        // Calculate utilization (active threads / current pool size)
+        double utilization = currentPoolSize > 0 ? (double) activeCount / currentPoolSize : 0;
+        
+        // Log current state
+        if (logger.isDebugEnabled()) {
+            logger.debug("Thread pool utilization: {}%, active: {}, size: {}, core: {}, max: {}",
+                    String.format("%.2f", utilization * 100),
+                    activeCount, currentPoolSize, corePoolSize, maxPoolSize);
+        }
+        
+        // If utilization is too high, increase core pool size
+        if (utilization > config.getTargetUtilization() && corePoolSize < maxPoolSize) {
+            int newCoreSize = Math.min(corePoolSize + 2, maxPoolSize);
+            threadPoolExecutor.setCorePoolSize(newCoreSize);
+            logger.info("Increased core pool size to {} due to high utilization: {}%", 
+                    newCoreSize, String.format("%.2f", utilization * 100));
+        }
+        // If utilization is very low, decrease core pool size
+        else if (utilization < config.getTargetUtilization() / 2 && corePoolSize > config.getCorePoolSize()) {
+            int newCoreSize = Math.max(corePoolSize - 1, config.getCorePoolSize());
+            threadPoolExecutor.setCorePoolSize(newCoreSize);
+            logger.info("Decreased core pool size to {} due to low utilization: {}%", 
+                    newCoreSize, String.format("%.2f", utilization * 100));
+        }
+    }
+    
+    /**
+     * Adjusts the queue capacity based on current load.
+     * 
+     * @param threadPoolExecutor the thread pool executor
+     */
+    private void adjustQueueCapacity(ThreadPoolExecutor threadPoolExecutor) {
+        BlockingQueue<Runnable> queue = threadPoolExecutor.getQueue();
+        
+        // We can only resize if it's a LinkedBlockingQueue
+        if (queue instanceof LinkedBlockingQueue) {
+            int queueSize = queue.size();
+            int queueCapacity = config.getQueueCapacity();
+            
+            // Calculate utilization (queue size / queue capacity)
+            double queueUtilization = (double) queueSize / queueCapacity;
+            
+            // Log current state
+            if (logger.isDebugEnabled()) {
+                logger.debug("Queue utilization: {}%, size: {}, capacity: {}",
+                        String.format("%.2f", queueUtilization * 100),
+                        queueSize, queueCapacity);
+            }
+            
+            // If queue is very full (>80%), increase capacity for next time
+            if (queueUtilization > 0.8) {
+                int newCapacity = (int) (queueCapacity * 1.5);
+                config.setQueueCapacity(newCapacity);
+                logger.info("Queue is heavily utilized ({}%). Will use increased capacity of {} for next startup.", 
+                        String.format("%.2f", queueUtilization * 100), newCapacity);
+            }
+        }
+    }
+
+    /**
+     * Starts the dynamic scaling monitor for work-stealing pools.
+     */
+    private void startDynamicScalingMonitor() {
+        // For work-stealing pools, we can't directly adjust the thread count,
+        // but we can monitor for overload and log warnings
+        Thread monitorThread = new Thread(() -> {
+            try {
+                while (!Thread.currentThread().isInterrupted()) {
+                    try {
+                        // Using completed/submitted tasks to estimate load
+                        long completed = tasksCompleted.get();
+                        long submitted = tasksSubmitted.get();
+                        
+                        if (submitted - completed > 1000) {
+                            logger.warn("Work-stealing pool appears to be overloaded: {} pending tasks", 
+                                    submitted - completed);
+                        }
+                        
+                        // Sleep before next check
+                        Thread.sleep(config.getScalingCheckIntervalMs());
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    } catch (Exception e) {
+                        logger.error("Error in work-stealing pool monitor", e);
+                    }
+                }
+            } catch (Exception e) {
+                logger.error("Work-stealing pool monitor terminated with exception", e);
+            }
+        }, "work-stealing-pool-monitor");
+        
+        monitorThread.setDaemon(true);
+        monitorThread.start();
+        
+        logger.info("Started work-stealing pool monitoring");
     }
 
     /**
@@ -320,9 +486,9 @@ public class ThreadPool {
      */
     public static class ThreadPoolConfig {
         // Thread pool sizing
-        private int corePoolSize = Runtime.getRuntime().availableProcessors();
-        private int maxPoolSize = Runtime.getRuntime().availableProcessors() * 2;
-        private int queueCapacity = 10000;
+        private int corePoolSize = Runtime.getRuntime().availableProcessors() * 4;
+        private int maxPoolSize = Runtime.getRuntime().availableProcessors() * 8;
+        private int queueCapacity = 100000;
         private Duration keepAliveTime = Duration.ofSeconds(60);
 
         // Thread configuration
@@ -330,11 +496,20 @@ public class ThreadPool {
         private boolean daemonThreads = true;
 
         // Pool behavior
-        private boolean allowCoreThreadTimeout = false;
+        private boolean allowCoreThreadTimeout = true;
         private boolean prestartCoreThreads = true;
         private boolean useSynchronousQueue = false;
-        private boolean useWorkStealing = false;
+        private boolean useWorkStealing = true;
         private boolean callerRunsWhenRejected = true;
+        
+        // Dynamic scaling
+        private boolean enableDynamicScaling = true;
+        private double targetUtilization = 0.75;
+        private int scalingCheckIntervalMs = 5000;
+        
+        // Adaptive queue behavior
+        private boolean useAdaptiveQueue = true;
+        private int adaptiveQueueCheckIntervalMs = 1000;
 
         // Metrics
         private boolean collectMetrics = true;
@@ -444,6 +619,51 @@ public class ThreadPool {
 
         public ThreadPoolConfig setCollectMetrics(boolean collectMetrics) {
             this.collectMetrics = collectMetrics;
+            return this;
+        }
+
+        public boolean isEnableDynamicScaling() {
+            return enableDynamicScaling;
+        }
+        
+        public ThreadPoolConfig setEnableDynamicScaling(boolean enableDynamicScaling) {
+            this.enableDynamicScaling = enableDynamicScaling;
+            return this;
+        }
+        
+        public double getTargetUtilization() {
+            return targetUtilization;
+        }
+        
+        public ThreadPoolConfig setTargetUtilization(double targetUtilization) {
+            this.targetUtilization = targetUtilization;
+            return this;
+        }
+        
+        public int getScalingCheckIntervalMs() {
+            return scalingCheckIntervalMs;
+        }
+        
+        public ThreadPoolConfig setScalingCheckIntervalMs(int scalingCheckIntervalMs) {
+            this.scalingCheckIntervalMs = scalingCheckIntervalMs;
+            return this;
+        }
+        
+        public boolean isUseAdaptiveQueue() {
+            return useAdaptiveQueue;
+        }
+        
+        public ThreadPoolConfig setUseAdaptiveQueue(boolean useAdaptiveQueue) {
+            this.useAdaptiveQueue = useAdaptiveQueue;
+            return this;
+        }
+        
+        public int getAdaptiveQueueCheckIntervalMs() {
+            return adaptiveQueueCheckIntervalMs;
+        }
+        
+        public ThreadPoolConfig setAdaptiveQueueCheckIntervalMs(int adaptiveQueueCheckIntervalMs) {
+            this.adaptiveQueueCheckIntervalMs = adaptiveQueueCheckIntervalMs;
             return this;
         }
     }

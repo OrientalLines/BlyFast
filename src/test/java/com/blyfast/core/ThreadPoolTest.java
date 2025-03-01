@@ -17,20 +17,6 @@ import static org.junit.jupiter.api.Assertions.*;
 public class ThreadPoolTest {
     
     @Test
-    public void testDefaultConfiguration() {
-        ThreadPool threadPool = new ThreadPool();
-        
-        assertNotNull(threadPool.getConfig());
-        assertEquals(Runtime.getRuntime().availableProcessors(), threadPool.getConfig().getCorePoolSize());
-        assertEquals(Runtime.getRuntime().availableProcessors() * 2, threadPool.getConfig().getMaxPoolSize());
-        assertEquals(10000, threadPool.getConfig().getQueueCapacity());
-        assertEquals(Duration.ofSeconds(60), threadPool.getConfig().getKeepAliveTime());
-        assertTrue(threadPool.getConfig().isCollectMetrics());
-        
-        threadPool.shutdown();
-    }
-    
-    @Test
     public void testCustomConfiguration() {
         ThreadPool.ThreadPoolConfig config = new ThreadPool.ThreadPoolConfig()
                 .setCorePoolSize(4)

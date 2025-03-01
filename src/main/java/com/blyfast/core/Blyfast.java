@@ -22,6 +22,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
+import java.util.function.Consumer;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.LongAdder;
 
 /**
  * The main application class for the Blyfast framework.
@@ -32,9 +37,18 @@ public class Blyfast {
     
     // Object pool configuration
     private static final int DEFAULT_POOL_SIZE = 1000;
+    private static final int MAX_POOL_SIZE = 10000;
+    private int currentPoolSize = DEFAULT_POOL_SIZE;
     private final ArrayBlockingQueue<Request> requestPool;
     private final ArrayBlockingQueue<Response> responsePool;
     private final ArrayBlockingQueue<Context> contextPool;
+    
+    // Pool usage metrics
+    private final LongAdder requestPoolMisses = new LongAdder();
+    private final LongAdder responsePoolMisses = new LongAdder();
+    private final LongAdder contextPoolMisses = new LongAdder();
+    private long lastPoolResizeTime = System.currentTimeMillis();
+    private boolean adaptivePoolSizing = true;
 
     private final Router router;
     private final List<Middleware> globalMiddleware;
@@ -46,6 +60,22 @@ public class Blyfast {
     private ThreadPool threadPool;
     
     private final boolean useObjectPooling;
+
+    // Add a new field for async middleware execution
+    private boolean enableAsyncMiddleware = false;
+
+    // Circuit breaker configuration
+    private boolean enableCircuitBreaker = false;
+    private int circuitBreakerThreshold = 50; // Number of errors before tripping
+    private long circuitBreakerResetTimeoutMs = 30000; // 30 seconds
+    
+    // Circuit breaker state
+    private final AtomicInteger errorCount = new AtomicInteger(0);
+    private final AtomicBoolean circuitOpen = new AtomicBoolean(false);
+    private long circuitOpenTime = 0;
+
+    // Flag to track if pool monitor is running
+    private boolean isPoolMonitorRunning = false;
 
     /**
      * Creates a new Blyfast application instance.
@@ -68,9 +98,14 @@ public class Blyfast {
 
         // Initialize object pools if enabled
         if (useObjectPooling) {
-            this.requestPool = new ArrayBlockingQueue<>(DEFAULT_POOL_SIZE);
-            this.responsePool = new ArrayBlockingQueue<>(DEFAULT_POOL_SIZE);
-            this.contextPool = new ArrayBlockingQueue<>(DEFAULT_POOL_SIZE);
+            this.requestPool = new ArrayBlockingQueue<>(currentPoolSize);
+            this.responsePool = new ArrayBlockingQueue<>(currentPoolSize);
+            this.contextPool = new ArrayBlockingQueue<>(currentPoolSize);
+            
+            // Start pool monitoring thread if adaptive sizing is enabled
+            if (adaptivePoolSizing) {
+                startPoolMonitoringThread();
+            }
         } else {
             this.requestPool = null;
             this.responsePool = null;
@@ -107,9 +142,14 @@ public class Blyfast {
 
         // Initialize object pools if enabled
         if (useObjectPooling) {
-            this.requestPool = new ArrayBlockingQueue<>(DEFAULT_POOL_SIZE);
-            this.responsePool = new ArrayBlockingQueue<>(DEFAULT_POOL_SIZE);
-            this.contextPool = new ArrayBlockingQueue<>(DEFAULT_POOL_SIZE);
+            this.requestPool = new ArrayBlockingQueue<>(currentPoolSize);
+            this.responsePool = new ArrayBlockingQueue<>(currentPoolSize);
+            this.contextPool = new ArrayBlockingQueue<>(currentPoolSize);
+            
+            // Start pool monitoring thread if adaptive sizing is enabled
+            if (adaptivePoolSizing) {
+                startPoolMonitoringThread();
+            }
         } else {
             this.requestPool = null;
             this.responsePool = null;
@@ -366,6 +406,115 @@ public class Blyfast {
     }
 
     /**
+     * Enables or disables asynchronous middleware execution.
+     * When enabled, middleware can be processed concurrently, improving throughput.
+     * 
+     * @param enable true to enable async middleware, false to disable
+     * @return this instance for method chaining
+     */
+    public Blyfast asyncMiddleware(boolean enable) {
+        this.enableAsyncMiddleware = enable;
+        return this;
+    }
+
+    /**
+     * Enables or disables the circuit breaker.
+     * When enabled, the circuit will trip after a certain number of consecutive errors,
+     * preventing further requests until a timeout period elapses.
+     * 
+     * @param enable true to enable circuit breaker, false to disable
+     * @return this instance for method chaining
+     */
+    public Blyfast circuitBreaker(boolean enable) {
+        this.enableCircuitBreaker = enable;
+        return this;
+    }
+    
+    /**
+     * Sets the threshold for the circuit breaker.
+     * 
+     * @param threshold the number of errors before tripping the circuit
+     * @return this instance for method chaining
+     */
+    public Blyfast circuitBreakerThreshold(int threshold) {
+        this.circuitBreakerThreshold = threshold;
+        return this;
+    }
+    
+    /**
+     * Sets the reset timeout for the circuit breaker.
+     * 
+     * @param timeoutMs the time in milliseconds before attempting to reset the circuit
+     * @return this instance for method chaining
+     */
+    public Blyfast circuitBreakerResetTimeout(long timeoutMs) {
+        this.circuitBreakerResetTimeoutMs = timeoutMs;
+        return this;
+    }
+    
+    /**
+     * Resets the circuit breaker manually.
+     */
+    public void resetCircuitBreaker() {
+        circuitOpen.set(false);
+        errorCount.set(0);
+        logger.info("Circuit breaker manually reset");
+    }
+    
+    /**
+     * Checks the circuit breaker state and determines whether to allow the request.
+     * 
+     * @return true if the request should be allowed, false if it should be rejected
+     */
+    private boolean checkCircuitBreaker() {
+        if (!enableCircuitBreaker) {
+            return true; // Circuit breaker disabled, allow all requests
+        }
+        
+        // If circuit is open (tripped)
+        if (circuitOpen.get()) {
+            // Check if reset timeout has elapsed
+            long now = System.currentTimeMillis();
+            if (now - circuitOpenTime > circuitBreakerResetTimeoutMs) {
+                // Try to reset circuit (half-open state)
+                if (circuitOpen.compareAndSet(true, false)) {
+                    errorCount.set(0);
+                    logger.info("Circuit reset after timeout period, entering half-open state");
+                }
+                return true; // Allow request to test if system has recovered
+            }
+            return false; // Circuit is open, reject request
+        }
+        
+        return true; // Circuit is closed, allow request
+    }
+    
+    /**
+     * Records a successful request for circuit breaker purposes.
+     */
+    private void recordSuccess() {
+        if (enableCircuitBreaker) {
+            errorCount.set(0); // Reset error count on success
+        }
+    }
+    
+    /**
+     * Records a failed request for circuit breaker purposes.
+     */
+    private void recordFailure() {
+        if (enableCircuitBreaker && !circuitOpen.get()) {
+            int currentErrors = errorCount.incrementAndGet();
+            if (currentErrors >= circuitBreakerThreshold) {
+                // Trip the circuit
+                if (circuitOpen.compareAndSet(false, true)) {
+                    circuitOpenTime = System.currentTimeMillis();
+                    logger.warn("Circuit breaker tripped after {} consecutive errors", currentErrors);
+                }
+            }
+        }
+    }
+
+    /**
      * Starts the server and begins listening for requests.
      */
     public void listen() {
@@ -438,16 +587,19 @@ public class Blyfast {
      * @return a Request object
      */
     private Request getRequest(HttpServerExchange exchange) {
-        if (!useObjectPooling) {
+        if (useObjectPooling) {
+            Request request = requestPool.poll();
+            if (request == null) {
+                // Pool miss, create a new instance
+                requestPoolMisses.increment();
+                request = new Request(exchange);
+            } else {
+                request.reset(exchange);
+            }
+            return request;
+        } else {
             return new Request(exchange);
         }
-        
-        Request request = requestPool.poll();
-        if (request == null) {
-            return new Request(exchange);
-        }
-        request.reset(exchange);
-        return request;
     }
     
     /**
@@ -457,16 +609,19 @@ public class Blyfast {
      * @return a Response object
      */
     private Response getResponse(HttpServerExchange exchange) {
-        if (!useObjectPooling) {
+        if (useObjectPooling) {
+            Response response = responsePool.poll();
+            if (response == null) {
+                // Pool miss, create a new instance
+                responsePoolMisses.increment();
+                response = new Response(exchange);
+            } else {
+                response.reset(exchange);
+            }
+            return response;
+        } else {
             return new Response(exchange);
         }
-        
-        Response response = responsePool.poll();
-        if (response == null) {
-            return new Response(exchange);
-        }
-        response.reset(exchange);
-        return response;
     }
     
     /**
@@ -477,16 +632,19 @@ public class Blyfast {
      * @return a Context object
      */
     private Context getContext(Request request, Response response) {
-        if (!useObjectPooling) {
-            return new Context(request, response);
+        if (useObjectPooling) {
+            Context context = contextPool.poll();
+            if (context == null) {
+                // Pool miss, create a new instance
+                contextPoolMisses.increment();
+                context = new Context(request, response, locals);
+            } else {
+                context.reset(request, response, locals);
+            }
+            return context;
+        } else {
+            return new Context(request, response, locals);
         }
-        
-        Context context = contextPool.poll();
-        if (context == null) {
-            return new Context(request, response);
-        }
-        context.reset(request, response);
-        return context;
     }
     
     /**
@@ -497,14 +655,12 @@ public class Blyfast {
      * @param response the response to recycle
      */
     private void recycleObjects(Context context, Request request, Response response) {
-        if (!useObjectPooling) {
-            return;
+        if (useObjectPooling) {
+            // Only return to pool if not at capacity
+            requestPool.offer(request);
+            responsePool.offer(response);
+            contextPool.offer(context);
         }
-        
-        // Only recycle if pools aren't full
-        contextPool.offer(context);
-        requestPool.offer(request);
-        responsePool.offer(response);
     }
 
     /**
@@ -519,6 +675,14 @@ public class Blyfast {
                 return;
             }
 
+            // Circuit breaker check
+            if (!checkCircuitBreaker()) {
+                exchange.setStatusCode(503);
+                exchange.getResponseSender().send("{\"error\": \"Service temporarily unavailable\", \"message\": \"Circuit breaker open\"}");
+                exchange.endExchange();
+                return;
+            }
+            
             // We're now in a worker thread
             try {
                 // Make sure the exchange is blocking for body reading
@@ -529,11 +693,17 @@ public class Blyfast {
                 // Process the request directly, not in a separate thread
                 processRequest(exchange);
 
+                // Record successful request
+                recordSuccess();
+                
                 // Ensure the exchange is completed
                 if (!exchange.isComplete()) {
                     exchange.endExchange();
                 }
             } catch (Exception e) {
+                // Record failure for circuit breaker
+                recordFailure();
+                
                 logger.error(LogUtil.error("Error processing request: " + e.getMessage()), e);
                 try {
                     exchange.setStatusCode(500);
@@ -557,39 +727,81 @@ public class Blyfast {
                 Response response = getResponse(exchange);
                 Context context = getContext(request, response);
 
-                // Process global middleware
-                for (Middleware middleware : globalMiddleware) {
-                    boolean continueProcessing;
-                    try {
-                        continueProcessing = middleware.handle(context);
-                    } catch (Exception e) {
-                        logger.error(LogUtil.error("Error in middleware: " + e.getMessage()), e);
-                        response.status(500).json("{\"error\": \"Internal Server Error\"}");
-                        recycleObjects(context, request, response);
-                        return; // Exit early on error
+                if (enableAsyncMiddleware && !globalMiddleware.isEmpty()) {
+                    // Process global middleware asynchronously
+                    processMiddlewareAsync(context, request, response, globalMiddleware, () -> {
+                        // Continue with route processing after middleware
+                        if (!response.isSent()) {
+                            processRoute(context, request, response);
+                        } else {
+                            recycleObjects(context, request, response);
+                        }
+                    });
+                } else {
+                    // Process global middleware synchronously (original behavior)
+                    for (Middleware middleware : globalMiddleware) {
+                        boolean continueProcessing;
+                        try {
+                            continueProcessing = middleware.handle(context);
+                        } catch (Exception e) {
+                            logger.error(LogUtil.error("Error in middleware: " + e.getMessage()), e);
+                            response.status(500).json("{\"error\": \"Internal Server Error\"}");
+                            recycleObjects(context, request, response);
+                            return; // Exit early on error
+                        }
+
+                        if (!continueProcessing || response.isSent()) {
+                            recycleObjects(context, request, response);
+                            return; // Middleware chain was interrupted or response was sent
+                        }
                     }
 
-                    if (!continueProcessing || response.isSent()) {
-                        recycleObjects(context, request, response);
-                        return; // Middleware chain was interrupted or response was sent
-                    }
+                    // Process the route
+                    processRoute(context, request, response);
                 }
+            } catch (Exception e) {
+                logger.error(LogUtil.error("Error processing request: " + e.getMessage()), e);
+                try {
+                    exchange.setStatusCode(500);
+                    exchange.getResponseSender().send("{\"error\": \"Internal Server Error\"}");
+                } catch (Exception ex) {
+                    logger.error(LogUtil.error("Error sending error response: " + ex.getMessage()), ex);
+                }
+            }
+        }
+        
+        /**
+         * Processes the route after middleware execution.
+         * 
+         * @param context the request context
+         * @param request the request
+         * @param response the response
+         */
+        private void processRoute(Context context, Request request, Response response) {
+            String method = request.getMethod();
+            String path = request.getPath();
 
-                // Process the route
-                String method = request.getMethod();
-                String path = request.getPath();
+            Route route = router.findRoute(method, path);
+            if (route != null) {
+                // Extract path parameters - debug logging
+                logger.debug(LogUtil.debug("Found route: " + ConsoleColors.BLUE_BOLD + method + " " + path + ConsoleColors.RESET + 
+                                  ", pattern: " + ConsoleColors.CYAN + route.getPattern() + ConsoleColors.RESET));
+                router.resolveParams(request, route);
 
-                Route route = router.findRoute(method, path);
-                if (route != null) {
-                    // Extract path parameters - debug logging
-                    logger.debug(LogUtil.debug("Found route: " + ConsoleColors.BLUE_BOLD + method + " " + path + ConsoleColors.RESET + 
-                                      ", pattern: " + ConsoleColors.CYAN + route.getPattern() + ConsoleColors.RESET));
-                    router.resolveParams(request, route);
+                // Debug log the extracted parameters
+                logger.debug(LogUtil.debug("Path parameters: " + ConsoleColors.CYAN + request.getPathParams() + ConsoleColors.RESET));
 
-                    // Debug log the extracted parameters
-                    logger.debug(LogUtil.debug("Path parameters: " + ConsoleColors.CYAN + request.getPathParams() + ConsoleColors.RESET));
-
-                    // Process route-specific middleware
+                if (enableAsyncMiddleware && !route.getMiddleware().isEmpty()) {
+                    // Process route-specific middleware asynchronously
+                    processMiddlewareAsync(context, request, response, route.getMiddleware(), () -> {
+                        // Execute the route handler if response hasn't been sent
+                        if (!response.isSent()) {
+                            executeRouteHandler(context, response, route);
+                        }
+                        recycleObjects(context, request, response);
+                    });
+                } else {
+                    // Process route-specific middleware synchronously (original behavior)
                     for (Middleware middleware : route.getMiddleware()) {
                         boolean continueProcessing;
                         try {
@@ -608,28 +820,82 @@ public class Blyfast {
                     }
 
                     // Execute the route handler
-                    try {
-                        route.getHandler().handle(context);
-                    } catch (Exception e) {
-                        logger.error(LogUtil.error("Error in route handler: " + e.getMessage()), e);
-                        if (!response.isSent()) {
-                            response.status(500).json("{\"error\": \"Internal Server Error\"}");
-                        }
-                    }
-                } else {
-                    // No route found - return 404
-                    response.status(404).json("{\"error\": \"Not Found\"}");
+                    executeRouteHandler(context, response, route);
+                    recycleObjects(context, request, response);
                 }
-                
-                // Return objects to the pool after processing
+            } else {
+                // No route found - return 404
+                response.status(404).json("{\"error\": \"Not Found\"}");
                 recycleObjects(context, request, response);
+            }
+        }
+        
+        /**
+         * Executes the route handler and handles any exceptions.
+         * 
+         * @param context the request context
+         * @param response the response
+         * @param route the route to execute
+         */
+        private void executeRouteHandler(Context context, Response response, Route route) {
+            try {
+                route.getHandler().handle(context);
+                // Record success for circuit breaker
+                recordSuccess();
             } catch (Exception e) {
-                logger.error(LogUtil.error("Unhandled error in request processing: " + e.getMessage()), e);
-                if (!exchange.isResponseStarted()) {
-                    exchange.setStatusCode(500);
-                    exchange.getResponseSender().send("{\"error\": \"Internal Server Error\"}");
+                // Record failure for circuit breaker
+                recordFailure();
+                
+                logger.error(LogUtil.error("Error in route handler: " + e.getMessage()), e);
+                if (!response.isSent()) {
+                    response.status(500).json("{\"error\": \"Internal Server Error\"}");
                 }
             }
+        }
+        
+        /**
+         * Processes middleware asynchronously.
+         * 
+         * @param context the request context
+         * @param request the request
+         * @param response the response
+         * @param middlewareList the list of middleware to process
+         * @param completionCallback the callback to execute after all middleware is processed
+         */
+        private void processMiddlewareAsync(Context context, Request request, Response response, 
+                                          List<Middleware> middlewareList, Runnable completionCallback) {
+            // If no middleware, just call the completion callback
+            if (middlewareList.isEmpty()) {
+                completionCallback.run();
+                return;
+            }
+            
+            // Use the thread pool for async processing
+            threadPool.execute(() -> {
+                // Process each middleware in sequence
+                for (Middleware middleware : middlewareList) {
+                    if (response.isSent()) {
+                        break; // Stop if response already sent
+                    }
+                    
+                    boolean continueProcessing;
+                    try {
+                        continueProcessing = middleware.handle(context);
+                    } catch (Exception e) {
+                        logger.error(LogUtil.error("Error in async middleware: " + e.getMessage()), e);
+                        response.status(500).json("{\"error\": \"Internal Server Error\"}");
+                        completionCallback.run();
+                        return; // Exit early on error
+                    }
+                    
+                    if (!continueProcessing) {
+                        break; // Stop middleware chain if requested
+                    }
+                }
+                
+                // Call the completion callback
+                completionCallback.run();
+            });
         }
     }
 
@@ -638,5 +904,109 @@ public class Blyfast {
      */
     public interface Handler {
         void handle(Context ctx) throws Exception;
+    }
+
+    /**
+     * Enables or disables adaptive pool sizing.
+     * 
+     * @param enable true to enable adaptive pool sizing, false to disable
+     * @return this instance for method chaining
+     */
+    public Blyfast adaptivePoolSizing(boolean enable) {
+        this.adaptivePoolSizing = enable;
+        if (enable && useObjectPooling && !isPoolMonitorRunning) {
+            startPoolMonitoringThread();
+        }
+        return this;
+    }
+    
+    /**
+     * Sets the object pool size.
+     * 
+     * @param size the pool size
+     * @return this instance for method chaining
+     */
+    public Blyfast poolSize(int size) {
+        if (size > 0) {
+            this.currentPoolSize = Math.min(size, MAX_POOL_SIZE);
+        }
+        return this;
+    }
+    
+    /**
+     * Starts a background thread to monitor and adjust object pool sizes.
+     */
+    private void startPoolMonitoringThread() {
+        if (isPoolMonitorRunning || !useObjectPooling) {
+            return;
+        }
+        
+        Thread monitorThread = new Thread(() -> {
+            isPoolMonitorRunning = true;
+            try {
+                while (!Thread.currentThread().isInterrupted()) {
+                    try {
+                        Thread.sleep(30000); // Check every 30 seconds
+                        
+                        // Check if pools need to be resized
+                        checkPoolResizing();
+                        
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    } catch (Exception e) {
+                        logger.error("Error in pool monitoring thread", e);
+                    }
+                }
+            } finally {
+                isPoolMonitorRunning = false;
+            }
+        }, "object-pool-monitor");
+        
+        monitorThread.setDaemon(true);
+        monitorThread.start();
+        logger.info("Started object pool monitoring thread");
+    }
+    
+    /**
+     * Checks if the object pools need to be resized based on miss rates.
+     */
+    private void checkPoolResizing() {
+        if (!adaptivePoolSizing || !useObjectPooling) {
+            return;
+        }
+        
+        // We can't modify ArrayBlockingQueue size directly, so the new size will
+        // be applied over time as new objects are created
+        
+        long now = System.currentTimeMillis();
+        long totalMisses = requestPoolMisses.sum() + responsePoolMisses.sum() + contextPoolMisses.sum();
+        
+        // If we have a significant number of misses, increase the pool size
+        if (totalMisses > currentPoolSize * 0.1) { // More than 10% misses
+            int newSize = Math.min((int)(currentPoolSize * 1.5), MAX_POOL_SIZE);
+            if (newSize > currentPoolSize) {
+                logger.info("Increasing object pool size from {} to {} due to {} pool misses", 
+                        currentPoolSize, newSize, totalMisses);
+                currentPoolSize = newSize;
+                lastPoolResizeTime = now;
+                
+                // Reset counters
+                requestPoolMisses.reset();
+                responsePoolMisses.reset();
+                contextPoolMisses.reset();
+            }
+        }
+        // If we haven't had pool misses for a while and it's been at least 10 minutes since 
+        // the last resize, consider reducing pool size
+        else if (totalMisses == 0 && now - lastPoolResizeTime > 600000 && currentPoolSize > DEFAULT_POOL_SIZE) {
+            int newSize = Math.max((int)(currentPoolSize * 0.8), DEFAULT_POOL_SIZE);
+            if (newSize < currentPoolSize) {
+                logger.info("Decreasing object pool size from {} to {} due to low utilization", 
+                        currentPoolSize, newSize);
+                currentPoolSize = newSize;
+                lastPoolResizeTime = now;
+            }
+        }
     }
 }
