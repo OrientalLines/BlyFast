@@ -27,6 +27,13 @@
             <version>2.3.5.Final</version>
         </dependency>
 
+        <!-- PostgreSQL JDBC Driver -->
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <version>42.6.0</version>
+        </dependency>
+
         <!-- JSON Processing -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
@@ -111,4 +118,4 @@
             </plugin>
         </plugins>
     </build>
-</project> 
+</project>

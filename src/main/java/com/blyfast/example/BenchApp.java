@@ -165,8 +165,8 @@ public class BenchApp {
             });
             
             // Start the server
-            server.port(3001).listen();
-            System.out.println("Benchmark server started on http://localhost:3001");
+            server.port(3005).listen();
+            System.out.println("Benchmark server started on http://localhost:3005");
             
         } catch (SQLException e) {
             System.err.println("Database connection error: " + e.getMessage());
