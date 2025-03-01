@@ -36,15 +36,23 @@ RESOURCES_DIR = ../../resources/native
 all: $(TARGET)
 
 $(TARGET): $(SOURCES)
-	mkdir -p $(RESOURCES_DIR)
+	@mkdir -p $(RESOURCES_DIR)
 	$(CC) $(CFLAGS) $(PLATFORM_CFLAGS) $(INCLUDES) -o $(TARGET) $(SOURCES)
+	@mkdir -p ../../../target/classes/native
+	@mkdir -p ../../../target/test-classes/native
 	cp $(TARGET) $(RESOURCES_DIR)/
+	cp $(TARGET) ../../../target/classes/native/
+	cp $(TARGET) ../../../target/test-classes/native/
+	@echo "Native library $(TARGET) compiled and installed to all directories"
 
 header:
+	@mkdir -p ../../classes
 	$(JAVAC) -d ../../classes ../../java/com/blyfast/nativeopt/NativeOptimizer.java
 	$(JAVAH) -classpath ../../classes -o blyfastnative.h com.blyfast.nativeopt.NativeOptimizer
 
 clean:
-	rm -f $(TARGET) $(RESOURCES_DIR)/$(TARGET)
+	@echo "Cleaning native libraries"
+	@rm -f $(TARGET) $(RESOURCES_DIR)/$(TARGET) ../../../target/classes/native/$(TARGET) ../../../target/test-classes/native/$(TARGET)
+	@echo "Clean completed"
 
 .PHONY: all clean header 

@@ -16,8 +16,8 @@
         <neverBlock>true</neverBlock>
     </appender>
 
-    <!-- Application logs - error only for extreme performance -->
-    <logger name="com.blyfast" level="ERROR" />
+    <!-- Application logs - DEBUG level for testing -->
+    <logger name="com.blyfast" level="DEBUG" />
     
     <!-- Third-party libraries - error only to eliminate overhead -->
     <logger name="io.undertow" level="ERROR" />

@@ -98,10 +98,65 @@
                     <target>${java.version}</target>
                 </configuration>
             </plugin>
+            
+            <!-- Native library compilation -->
+            <plugin>
+                <groupId>org.codehaus.mojo</groupId>
+                <artifactId>exec-maven-plugin</artifactId>
+                <version>3.1.0</version>
+                <executions>
+                    <!-- Clean native libraries -->
+                    <execution>
+                        <id>clean-native</id>
+                        <phase>clean</phase>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <workingDirectory>${project.basedir}/src/main/native</workingDirectory>
+                            <executable>make</executable>
+                            <arguments>
+                                <argument>clean</argument>
+                            </arguments>
+                            <successCodes>
+                                <successCode>0</successCode>
+                                <successCode>1</successCode>
+                                <successCode>2</successCode>
+                            </successCodes>
+                        </configuration>
+                    </execution>
+                    <!-- Compile native libraries -->
+                    <execution>
+                        <id>compile-native</id>
+                        <phase>process-classes</phase>
+                        <goals>
+                            <goal>exec</goal>
+                        </goals>
+                        <configuration>
+                            <workingDirectory>${project.basedir}/src/main/native</workingDirectory>
+                            <executable>make</executable>
+                            <arguments>
+                                <argument>all</argument>
+                            </arguments>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.1.2</version>
+                <configuration>
+                    <environmentVariables>
+                        <!-- Set environment variables for native library loading -->
+                        <LD_LIBRARY_PATH>${project.build.directory}/classes/native</LD_LIBRARY_PATH>
+                        <DYLD_LIBRARY_PATH>${project.build.directory}/classes/native</DYLD_LIBRARY_PATH>
+                    </environmentVariables>
+                    <argLine>-Djava.library.path=${project.build.directory}/classes/native</argLine>
+                    <forkCount>1</forkCount>
+                    <reuseForks>false</reuseForks>
+                </configuration>
             </plugin>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
@@ -116,6 +171,38 @@
                     </execution>
                 </executions>
             </plugin>
+            
+            <!-- Add native resources to JAR -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-resources-plugin</artifactId>
+                <version>3.3.1</version>
+                <executions>
+                    <execution>
+                        <id>copy-native-libraries</id>
+                        <phase>process-resources</phase>
+                        <goals>
+                            <goal>copy-resources</goal>
+                        </goals>
+                        <configuration>
+                            <outputDirectory>${project.build.directory}/classes/native</outputDirectory>
+                            <resources>
+                                <resource>
+                                    <directory>${project.basedir}/src/main/resources/native</directory>
+                                    <filtering>false</filtering>
+                                </resource>
+                            </resources>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
         </plugins>
+        
+        <!-- Include native libraries in resources -->
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+        </resources>
     </build>
 </project>

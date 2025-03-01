@@ -13,6 +13,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import sun.misc.Unsafe;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import com.blyfast.util.NativeLibraryLoader;
 
 /**
  * Provides native optimizations for the BlyFast framework.
@@ -50,7 +51,7 @@ public class NativeOptimizer {
         try {
             loadNativeLibrary();
         } catch (Exception e) {
-            logger.warn("Failed to load native library. Native optimizations will be disabled.", e);
+            logger.warn("Failed to load native optimization library. Will use Java fallback methods.", e);
         }
         
         // Initialize JVM optimization flags if running on HotSpot
@@ -58,47 +59,50 @@ public class NativeOptimizer {
     }
     
     /**
-     * Attempts to load the native library based on the detected operating system.
+     * Attempts to load the native library.
      */
     private static void loadNativeLibrary() {
-        String osName = System.getProperty("os.name").toLowerCase();
-        String resourcePath = "/native/";
-        String libraryFile;
+        logger.info("Initializing native optimizations for BlyFast");
         
-        if (osName.contains("linux")) {
-            libraryFile = NATIVE_LIB_LINUX;
-        } else if (osName.contains("mac") || osName.contains("darwin")) {
-            libraryFile = NATIVE_LIB_MAC;
-        } else if (osName.contains("windows")) {
-            libraryFile = NATIVE_LIB_WINDOWS;
-        } else {
-            logger.warn("Unsupported OS detected: {}. Native optimizations disabled.", osName);
+        if (NATIVE_LOADED.get()) {
+            logger.debug("Native library already loaded");
             return;
         }
         
-        try {
-            // Extract native library to a temp file
-            Path tempFile = Files.createTempFile("blyfastnative", libraryFile);
-            try (InputStream in = NativeOptimizer.class.getResourceAsStream(resourcePath + libraryFile)) {
-                if (in == null) {
-                    logger.warn("Native library {} not found in resources. Native optimizations disabled.", libraryFile);
-                    return;
-                }
-                Files.copy(in, tempFile, StandardCopyOption.REPLACE_EXISTING);
-            }
-            
-            // Load the library
-            System.load(tempFile.toAbsolutePath().toString());
+        // Use the NativeLibraryLoader utility to load the library
+        boolean loaded = NativeLibraryLoader.loadLibrary(LIBRARY_NAME);
+        
+        if (loaded) {
             NATIVE_LOADED.set(true);
+            // Initialize platform-specific JVM optimizations
+            initJvmOptimizations();
+            logger.info("Native optimizations initialized successfully");
             
-            // Delete the temp file on exit
-            tempFile.toFile().deleteOnExit();
-            
-            logger.info("Successfully loaded native optimization library: {}", libraryFile);
-        } catch (IOException e) {
-            logger.warn("Failed to extract native library. Native optimizations disabled.", e);
-        } catch (UnsatisfiedLinkError e) {
-            logger.warn("Failed to load native library. Native optimizations disabled.", e);
+            // Verify native methods can be called - this helps catch issues early
+            try {
+                // Simple test call to verify linking
+                String testResult = nativeEscapeJson("test");
+                logger.debug("Native method test successful: {}", testResult != null);
+            } catch (UnsatisfiedLinkError e) {
+                // If this fails, reset the loaded flag
+                NATIVE_LOADED.set(false);
+                logger.error("Failed to call native method after loading library: {}", e.getMessage());
+            }
+        } else {
+            logger.warn("Native library could not be loaded. Performance will be reduced.");
+        }
+    }
+    
+    /**
+     * Forces reloading of the native library.
+     * This can be useful in testing scenarios.
+     */
+    public static void forceReload() {
+        NATIVE_LOADED.set(false);
+        try {
+            loadNativeLibrary();
+        } catch (Exception e) {
+            logger.error("Failed to reload native library: {}", e.getMessage(), e);
         }
     }
     
@@ -293,5 +297,60 @@ public class NativeOptimizer {
      */
     public static boolean isUnsafeAvailable() {
         return UNSAFE_AVAILABLE.get();
+    }
+
+    /**
+     * Java fallback implementation for fast JSON string escaping.
+     */
+    private static String javaEscapeJson(String input) {
+        if (input == null) return null;
+        
+        StringBuilder out = new StringBuilder(input.length() + 16);
+        for (int i = 0; i < input.length(); i++) {
+            char c = input.charAt(i);
+            switch (c) {
+                case '"': out.append("\\\""); break;
+                case '\\': out.append("\\\\"); break;
+                case '\b': out.append("\\b"); break;
+                case '\f': out.append("\\f"); break;
+                case '\n': out.append("\\n"); break;
+                case '\r': out.append("\\r"); break;
+                case '\t': out.append("\\t"); break;
+                default:
+                    if (c < ' ') {
+                        out.append(String.format("\\u%04x", (int) c));
+                    } else {
+                        out.append(c);
+                    }
+            }
+        }
+        return out.toString();
+    }
+    
+    /**
+     * Fast JSON string escaping with native fallback.
+     * 
+     * @param input the string to escape
+     * @return the escaped string
+     */
+    public static String escapeJson(String input) {
+        if (NATIVE_LOADED.get()) {
+            try {
+                logger.debug("Using native JSON escaping for input: {}", input);
+                return nativeEscapeJson(input);
+            } catch (UnsatisfiedLinkError e) {
+                logger.warn("Native method nativeEscapeJson failed, falling back to Java implementation. Error: {}", e.getMessage());
+                logger.debug("Stack trace:", e);
+                
+                // Print JVM info for debugging
+                logger.debug("Java library path: {}", System.getProperty("java.library.path"));
+                logger.debug("Native library loaded flag: {}", NATIVE_LOADED.get());
+                
+                NATIVE_LOADED.set(false); // Reset flag since native methods aren't working
+                return javaEscapeJson(input);
+            }
+        }
+        logger.debug("Using Java JSON escaping for input: {}", input);
+        return javaEscapeJson(input);
     }
 } 
