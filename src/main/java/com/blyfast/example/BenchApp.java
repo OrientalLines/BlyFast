@@ -224,18 +224,9 @@ public class BenchApp {
         try {
             // Initialize connection pool
             initConnectionPool();
-
-            ThreadPool.ThreadPoolConfig config = new ThreadPool.ThreadPoolConfig()
-                    .setCorePoolSize(Runtime.getRuntime().availableProcessors() * 10)
-                    .setMaxPoolSize(Runtime.getRuntime().availableProcessors() * 20)
-                    .setQueueCapacity(500000)
-                    .setPrestartCoreThreads(true)
-                    .setUseSynchronousQueue(false)
-                    .setUseWorkStealing(true)
-                    .setEnableDynamicScaling(true);
-
+            
             // Create server with optimized configuration
-            Blyfast server = new Blyfast(config);
+            Blyfast server = new Blyfast();
 
             // Insert endpoint
             server.post("/insert", ctx -> {
