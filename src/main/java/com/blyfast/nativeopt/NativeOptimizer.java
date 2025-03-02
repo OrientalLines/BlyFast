@@ -188,6 +188,26 @@ public class NativeOptimizer {
     public static native int nativeAnalyzeHttpBody(ByteBuffer bodyBuffer, int length, String contentType);
     
     /**
+     * Fast parsing of HTTP body based on detected content type.
+     * 
+     * @param bodyBuffer the body data buffer
+     * @param length the length of the data
+     * @param bodyType the type of body (from nativeAnalyzeHttpBody)
+     * @return a ByteBuffer containing the parsed data in an optimized format
+     */
+    public static native ByteBuffer nativeFastParseBody(ByteBuffer bodyBuffer, int length, int bodyType);
+    
+    /**
+     * Fast content type detection from the body contents.
+     * 
+     * @param bodyBuffer the body data buffer
+     * @param length the length of the data
+     * @return an integer code representing the detected body type (0=unknown, 1=JSON, 2=form, 3=multipart, 
+     *         4=text, 5=binary, 6=XML, 7=HTML)
+     */
+    public static native int nativeFastDetectContentType(ByteBuffer bodyBuffer, int length);
+    
+    /**
      * Optimized string to bytes conversion with direct memory.
      * Falls back to Java implementation if native library isn't available.
      * 
