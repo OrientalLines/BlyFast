@@ -260,13 +260,7 @@ public class Response {
         }
         
         // Regular Java implementation path
-        byte[] bytes = null;
-        if (NativeOptimizer.isUnsafeAvailable()) {
-            // Use optimized byte array allocation if Unsafe is available
-            bytes = json.getBytes(StandardCharsets.UTF_8);
-        } else {
-            bytes = json.getBytes(StandardCharsets.UTF_8);
-        }
+        byte[] bytes = json.getBytes(StandardCharsets.UTF_8);
         
         // Super-fast path for very small responses (most API responses)
         if (bytes.length <= SMALL_RESPONSE_THRESHOLD) {

@@ -26,6 +26,14 @@ static int next_header_id = 1;
 jobject parseFormData(JNIEnv *env, char* buffer, jint length);
 jobject parseMultipartForm(JNIEnv *env, char* buffer, jint length);
 
+// Forward declarations for our recursive parser functions
+static void skipWhitespace(const char **cursor, const char *end);
+static jobject parseJsonValue(JNIEnv *env, const char **cursor, const char *end);
+static jobject parseJsonObject(JNIEnv *env, const char **cursor, const char *end);
+static jobject parseJsonArray(JNIEnv *env, const char **cursor, const char *end);
+static jobject parseJsonString(JNIEnv *env, const char **cursor, const char *end);
+static jobject parseJsonNumber(JNIEnv *env, const char **cursor, const char *end);
+
 // JNI method implementations for com.blyfast.nativeopt.NativeOptimizer
 
 /**
@@ -124,16 +132,427 @@ JNIEXPORT jobject JNICALL Java_com_blyfast_nativeopt_NativeOptimizer_nativeParse
     // Calculate the length of the input string
     size_t length = (*env)->GetStringUTFLength(env, input);
     
-    // For this implementation, we'll just return a ByteBuffer with the UTF-8 bytes
-    // A full JSON parser would be much more complex and beyond the scope here
+    // Start parsing from the beginning
+    const char *cursor = utf8Str;
+    const char *end = utf8Str + length;
     
-    // Allocate a direct ByteBuffer
-    jobject buffer = (*env)->NewDirectByteBuffer(env, (void *)utf8Str, length);
+    // Parse the top-level JSON value
+    jobject result = parseJsonValue(env, &cursor, end);
     
-    // Note: Normally we would release utf8Str, but the ByteBuffer now owns the pointer
-    // So we don't call (*env)->ReleaseStringUTFChars here
+    // Clean up the input string
+    (*env)->ReleaseStringUTFChars(env, input, utf8Str);
     
-    return buffer;
+    return result;
+}
+
+// Skip whitespace characters
+static void skipWhitespace(const char **cursor, const char *end) {
+    while (*cursor < end) {
+        char c = **cursor;
+        if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+            (*cursor)++;
+        } else {
+            break;
+        }
+    }
+}
+
+// Parse a JSON value (object, array, string, number, true, false, null)
+static jobject parseJsonValue(JNIEnv *env, const char **cursor, const char *end) {
+    skipWhitespace(cursor, end);
+    
+    if (*cursor >= end) {
+        return NULL; // Unexpected end of input
+    }
+    
+    char c = **cursor;
+    
+    if (c == '{') {
+        return parseJsonObject(env, cursor, end);
+    } else if (c == '[') {
+        return parseJsonArray(env, cursor, end);
+    } else if (c == '"') {
+        return parseJsonString(env, cursor, end);
+    } else if (c == 't') {
+        // Parse 'true'
+        if (*cursor + 4 <= end && strncmp(*cursor, "true", 4) == 0) {
+            *cursor += 4;
+            
+            // Get Boolean.TRUE
+            jclass booleanClass = (*env)->FindClass(env, "java/lang/Boolean");
+            if (booleanClass == NULL) return NULL;
+            
+            jfieldID trueField = (*env)->GetStaticFieldID(env, booleanClass, "TRUE", "Ljava/lang/Boolean;");
+            if (trueField == NULL) return NULL;
+            
+            jobject trueValue = (*env)->GetStaticObjectField(env, booleanClass, trueField);
+            return trueValue;
+        }
+    } else if (c == 'f') {
+        // Parse 'false'
+        if (*cursor + 5 <= end && strncmp(*cursor, "false", 5) == 0) {
+            *cursor += 5;
+            
+            // Get Boolean.FALSE
+            jclass booleanClass = (*env)->FindClass(env, "java/lang/Boolean");
+            if (booleanClass == NULL) return NULL;
+            
+            jfieldID falseField = (*env)->GetStaticFieldID(env, booleanClass, "FALSE", "Ljava/lang/Boolean;");
+            if (falseField == NULL) return NULL;
+            
+            jobject falseValue = (*env)->GetStaticObjectField(env, booleanClass, falseField);
+            return falseValue;
+        }
+    } else if (c == 'n') {
+        // Parse 'null'
+        if (*cursor + 4 <= end && strncmp(*cursor, "null", 4) == 0) {
+            *cursor += 4;
+            return NULL; // In Java, null is represented as NULL in C
+        }
+    } else if (c == '-' || (c >= '0' && c <= '9')) {
+        return parseJsonNumber(env, cursor, end);
+    }
+    
+    return NULL; // Invalid JSON or unsupported value type
+}
+
+// Parse a JSON object
+static jobject parseJsonObject(JNIEnv *env, const char **cursor, const char *end) {
+    // Skip opening brace
+    (*cursor)++;
+    
+    // Create a HashMap
+    jclass mapClass = (*env)->FindClass(env, "java/util/HashMap");
+    if (mapClass == NULL) return NULL;
+    
+    jmethodID mapConstructor = (*env)->GetMethodID(env, mapClass, "<init>", "()V");
+    if (mapConstructor == NULL) return NULL;
+    
+    jobject map = (*env)->NewObject(env, mapClass, mapConstructor);
+    if (map == NULL) return NULL;
+    
+    jmethodID putMethod = (*env)->GetMethodID(env, mapClass, "put", 
+                                             "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+    if (putMethod == NULL) return NULL;
+    
+    skipWhitespace(cursor, end);
+    
+    // Check if it's an empty object
+    if (*cursor < end && **cursor == '}') {
+        (*cursor)++;
+        return map;
+    }
+    
+    // Parse key-value pairs
+    while (*cursor < end) {
+        skipWhitespace(cursor, end);
+        
+        // Expect a string key
+        if (**cursor != '"') {
+            break; // Invalid format
+        }
+        
+        // Parse the key
+        jobject key = parseJsonString(env, cursor, end);
+        if (key == NULL) {
+            return NULL;
+        }
+        
+        skipWhitespace(cursor, end);
+        
+        // Expect a colon
+        if (*cursor >= end || **cursor != ':') {
+            (*env)->DeleteLocalRef(env, key);
+            return NULL;
+        }
+        (*cursor)++; // Skip the colon
+        
+        // Parse the value
+        jobject value = parseJsonValue(env, cursor, end);
+        
+        // Add key-value pair to the map
+        // Note: value can be NULL for JSON null
+        (*env)->CallObjectMethod(env, map, putMethod, key, value);
+        
+        // Clean up references
+        (*env)->DeleteLocalRef(env, key);
+        if (value != NULL) (*env)->DeleteLocalRef(env, value);
+        
+        skipWhitespace(cursor, end);
+        
+        // Check for end of object or comma for next pair
+        if (*cursor >= end) {
+            return NULL;
+        }
+        
+        if (**cursor == '}') {
+            (*cursor)++;
+            return map;
+        } else if (**cursor == ',') {
+            (*cursor)++;
+        } else {
+            return NULL; // Invalid format
+        }
+    }
+    
+    return NULL; // Invalid format or unexpected end
+}
+
+// Parse a JSON array
+static jobject parseJsonArray(JNIEnv *env, const char **cursor, const char *end) {
+    // Skip opening bracket
+    (*cursor)++;
+    
+    // Create an ArrayList
+    jclass listClass = (*env)->FindClass(env, "java/util/ArrayList");
+    if (listClass == NULL) return NULL;
+    
+    jmethodID listConstructor = (*env)->GetMethodID(env, listClass, "<init>", "()V");
+    if (listConstructor == NULL) return NULL;
+    
+    jobject list = (*env)->NewObject(env, listClass, listConstructor);
+    if (list == NULL) return NULL;
+    
+    jmethodID addMethod = (*env)->GetMethodID(env, listClass, "add", "(Ljava/lang/Object;)Z");
+    if (addMethod == NULL) return NULL;
+    
+    skipWhitespace(cursor, end);
+    
+    // Check if it's an empty array
+    if (*cursor < end && **cursor == ']') {
+        (*cursor)++;
+        return list;
+    }
+    
+    // Parse array elements
+    while (*cursor < end) {
+        // Parse the value
+        jobject value = parseJsonValue(env, cursor, end);
+        
+        // Add value to the list
+        // Note: For null values, we still need to add them to maintain array indices
+        (*env)->CallBooleanMethod(env, list, addMethod, value);
+        
+        // Clean up the value reference
+        if (value != NULL) (*env)->DeleteLocalRef(env, value);
+        
+        skipWhitespace(cursor, end);
+        
+        // Check for end of array or comma for next element
+        if (*cursor >= end) {
+            return NULL;
+        }
+        
+        if (**cursor == ']') {
+            (*cursor)++;
+            return list;
+        } else if (**cursor == ',') {
+            (*cursor)++;
+        } else {
+            return NULL; // Invalid format
+        }
+    }
+    
+    return NULL; // Invalid format or unexpected end
+}
+
+// Parse a JSON string
+static jobject parseJsonString(JNIEnv *env, const char **cursor, const char *end) {
+    // Skip opening quote
+    (*cursor)++;
+    
+    const char *start = *cursor;
+    char *buffer = NULL;
+    size_t bufPos = 0;
+    size_t bufSize = 0;
+    jboolean hasEscapes = JNI_FALSE;
+    
+    // First pass: find the end of the string and check for escapes
+    const char *scan = start;
+    while (scan < end && *scan != '"') {
+        if (*scan == '\\') {
+            hasEscapes = JNI_TRUE;
+            scan++; // Skip the backslash
+            if (scan >= end) {
+                return NULL; // Unexpected end of input
+            }
+        }
+        scan++;
+    }
+    
+    if (scan >= end) {
+        return NULL; // Unterminated string
+    }
+    
+    // If no escapes, we can create the string directly
+    if (!hasEscapes) {
+        // Create a Java string from the substring
+        jstring jstr = (*env)->NewStringUTF(env, start);
+        *cursor = scan + 1; // Skip the closing quote
+        return jstr;
+    }
+    
+    // If we have escapes, we need to process them
+    bufSize = (scan - start) + 1; // +1 for null terminator
+    buffer = (char*)malloc(bufSize);
+    if (buffer == NULL) {
+        return NULL; // Memory allocation failed
+    }
+    
+    // Second pass: process escapes
+    while (*cursor < end && **cursor != '"') {
+        if (**cursor == '\\') {
+            (*cursor)++;
+            if (*cursor >= end) {
+                free(buffer);
+                return NULL; // Unexpected end of input
+            }
+            
+            char c = **cursor;
+            switch (c) {
+                case '"':
+                case '\\':
+                case '/':
+                    buffer[bufPos++] = c;
+                    break;
+                case 'b': buffer[bufPos++] = '\b'; break;
+                case 'f': buffer[bufPos++] = '\f'; break;
+                case 'n': buffer[bufPos++] = '\n'; break;
+                case 'r': buffer[bufPos++] = '\r'; break;
+                case 't': buffer[bufPos++] = '\t'; break;
+                case 'u':
+                    // Unicode escape sequence \uXXXX
+                    if (*cursor + 4 >= end) {
+                        free(buffer);
+                        return NULL; // Unexpected end of input
+                    }
+                    
+                    // Parse the 4 hex digits
+                    char hexStr[5] = {0};
+                    memcpy(hexStr, *cursor + 1, 4);
+                    
+                    // Convert hex to integer
+                    int hexValue;
+                    if (sscanf(hexStr, "%x", &hexValue) != 1) {
+                        free(buffer);
+                        return NULL; // Invalid hex sequence
+                    }
+                    
+                    // UTF-8 encoding
+                    if (hexValue < 0x80) {
+                        buffer[bufPos++] = (char)hexValue;
+                    } else if (hexValue < 0x800) {
+                        buffer[bufPos++] = (char)(0xC0 | (hexValue >> 6));
+                        buffer[bufPos++] = (char)(0x80 | (hexValue & 0x3F));
+                    } else {
+                        buffer[bufPos++] = (char)(0xE0 | (hexValue >> 12));
+                        buffer[bufPos++] = (char)(0x80 | ((hexValue >> 6) & 0x3F));
+                        buffer[bufPos++] = (char)(0x80 | (hexValue & 0x3F));
+                    }
+                    
+                    *cursor += 4; // Skip the 4 hex digits
+                    break;
+                default:
+                    // Invalid escape sequence
+                    free(buffer);
+                    return NULL;
+            }
+        } else {
+            buffer[bufPos++] = **cursor;
+        }
+        
+        (*cursor)++;
+    }
+    
+    if (*cursor >= end || **cursor != '"') {
+        free(buffer);
+        return NULL; // Unterminated string
+    }
+    
+    // Null-terminate the buffer
+    buffer[bufPos] = '\0';
+    
+    // Create Java string
+    jstring jstr = (*env)->NewStringUTF(env, buffer);
+    
+    // Clean up
+    free(buffer);
+    
+    // Skip closing quote
+    (*cursor)++;
+    
+    return jstr;
+}
+
+// Parse a JSON number
+static jobject parseJsonNumber(JNIEnv *env, const char **cursor, const char *end) {
+    const char *start = *cursor;
+    jboolean isFloatingPoint = JNI_FALSE;
+    
+    // Skip optional minus sign
+    if (*cursor < end && **cursor == '-') {
+        (*cursor)++;
+    }
+    
+    // Parse digits before decimal point
+    while (*cursor < end && **cursor >= '0' && **cursor <= '9') {
+        (*cursor)++;
+    }
+    
+    // Check for decimal point
+    if (*cursor < end && **cursor == '.') {
+        isFloatingPoint = JNI_TRUE;
+        (*cursor)++;
+        
+        // Parse digits after decimal point
+        while (*cursor < end && **cursor >= '0' && **cursor <= '9') {
+            (*cursor)++;
+        }
+    }
+    
+    // Check for exponent
+    if (*cursor < end && (**cursor == 'e' || **cursor == 'E')) {
+        isFloatingPoint = JNI_TRUE;
+        (*cursor)++;
+        
+        // Skip optional sign
+        if (*cursor < end && (**cursor == '+' || **cursor == '-')) {
+            (*cursor)++;
+        }
+        
+        // Parse exponent digits
+        while (*cursor < end && **cursor >= '0' && **cursor <= '9') {
+            (*cursor)++;
+        }
+    }
+    
+    // Extract the number string
+    size_t len = *cursor - start;
+    char *numStr = (char*)malloc(len + 1);
+    if (numStr == NULL) {
+        return NULL;
+    }
+    memcpy(numStr, start, len);
+    numStr[len] = '\0';
+    
+    jobject result = NULL;
+    
+    if (isFloatingPoint) {
+        // Create a Double object
+        jdouble value = atof(numStr);
+        jclass doubleClass = (*env)->FindClass(env, "java/lang/Double");
+        jmethodID doubleConstructor = (*env)->GetMethodID(env, doubleClass, "<init>", "(D)V");
+        result = (*env)->NewObject(env, doubleClass, doubleConstructor, value);
+    } else {
+        // Check if the number fits in a Long
+        long long llvalue = atoll(numStr);
+        jclass longClass = (*env)->FindClass(env, "java/lang/Long");
+        jmethodID longConstructor = (*env)->GetMethodID(env, longClass, "<init>", "(J)V");
+        result = (*env)->NewObject(env, longClass, longConstructor, (jlong)llvalue);
+    }
+    
+    free(numStr);
+    return result;
 }
 
 /**
@@ -530,6 +949,10 @@ jobject parseFormData(JNIEnv *env, char* buffer, jint length) {
  * - Malformed input detection and error handling
  */
 jobject parseMultipartForm(JNIEnv *env, char* buffer, jint length) {
+    if (buffer == NULL || length <= 0) {
+        return NULL; // Invalid input
+    }
+
     // Define structure for multipart/form-data parts
     typedef struct {
         char* name;          // Field name
@@ -547,13 +970,16 @@ jobject parseMultipartForm(JNIEnv *env, char* buffer, jint length) {
     MultipartPart parts[MAX_PARTS];
     int partCount = 0;
     
+    // Initialize all parts to null values
+    memset(parts, 0, sizeof(parts));
+    
     // Find the boundary
     char boundary[256] = {0};
     int boundaryLen = 0;
     
-    // Extract boundary from Content-Type header or from the data
+    // Extract boundary from the data
     for (int i = 0; i < length - 10; i++) {
-        if (buffer[i] == '-' && buffer[i+1] == '-') {
+        if (i + 1 < length && buffer[i] == '-' && buffer[i+1] == '-') {
             // Potential boundary start
             int j = i + 2;
             
@@ -561,17 +987,22 @@ jobject parseMultipartForm(JNIEnv *env, char* buffer, jint length) {
             int isLikelyBoundary = 0;
             for (int k = j; k < length; k++) {
                 if (buffer[k] == '\r' || buffer[k] == '\n' || 
-                   (buffer[k] == '-' && k+1 < length && buffer[k+1] == '-')) {
+                   (k + 1 < length && buffer[k] == '-' && buffer[k+1] == '-')) {
                     isLikelyBoundary = 1;
                     break;
                 }
-                if (k - j > 200) break; // Too long to be a boundary
+                // Safeguard against too long boundary
+                if (k - j > 200 || k - j >= sizeof(boundary) - 1) {
+                    break;
+                }
             }
             
             if (isLikelyBoundary) {
+                // Extract boundary string safely
+                boundaryLen = 0;
                 while (j < length && buffer[j] != '\r' && buffer[j] != '\n' && 
-                       !(buffer[j] == '-' && j+1 < length && buffer[j+1] == '-') && 
-                       boundaryLen < 255) {
+                       !(j + 1 < length && buffer[j] == '-' && buffer[j+1] == '-') && 
+                       boundaryLen < sizeof(boundary) - 1) {
                     boundary[boundaryLen++] = buffer[j++];
                 }
                 boundary[boundaryLen] = 0;
@@ -582,16 +1013,28 @@ jobject parseMultipartForm(JNIEnv *env, char* buffer, jint length) {
     
     if (boundaryLen == 0) {
         // Failed to find boundary
-        free(buffer);
         return NULL;
     }
     
     // Prepare boundary markers
-    char* boundaryStart = malloc(boundaryLen + 5); // "--boundary"
-    char* boundaryEnd = malloc(boundaryLen + 7);   // "--boundary--"
+    char* boundaryStart = NULL;
+    char* boundaryEnd = NULL;
     
-    sprintf(boundaryStart, "--%s", boundary);
-    sprintf(boundaryEnd, "--%s--", boundary);
+    // Safely allocate boundary markers with length checks
+    boundaryStart = malloc(boundaryLen + 5); // "--boundary"
+    if (!boundaryStart) {
+        return NULL; // Memory allocation failure
+    }
+    
+    boundaryEnd = malloc(boundaryLen + 7);   // "--boundary--"
+    if (!boundaryEnd) {
+        free(boundaryStart);
+        return NULL; // Memory allocation failure
+    }
+    
+    // Format boundary strings
+    snprintf(boundaryStart, boundaryLen + 5, "--%s", boundary);
+    snprintf(boundaryEnd, boundaryLen + 7, "--%s--", boundary);
     
     int boundaryStartLen = boundaryLen + 2;
     int boundaryEndLen = boundaryLen + 4;
@@ -605,11 +1048,11 @@ jobject parseMultipartForm(JNIEnv *env, char* buffer, jint length) {
         int boundaryPos = -1;
         
         for (int i = pos; i <= length - boundaryStartLen; i++) {
-            // Check for boundary start
-            if (memcmp(buffer + i, boundaryStart, boundaryStartLen) == 0) {
+            // Check for boundary start (with bounds checking)
+            if (i + boundaryStartLen <= length && memcmp(buffer + i, boundaryStart, boundaryStartLen) == 0) {
                 boundaryPos = i;
                 
-                // Check if this is end boundary
+                // Check if this is end boundary (with bounds checking)
                 if (i + boundaryEndLen <= length && 
                     memcmp(buffer + i, boundaryEnd, boundaryEndLen) == 0) {
                     foundEndBoundary = 1;
@@ -634,24 +1077,27 @@ jobject parseMultipartForm(JNIEnv *env, char* buffer, jint length) {
             headerStart++;
         }
         
+        // Ensure we haven't gone past the end of the buffer
+        if (headerStart >= length) {
+            break;
+        }
+        
         // Parse headers
         MultipartPart* part = &parts[partCount];
-        part->name = NULL;
-        part->filename = NULL;
-        part->contentType = NULL;
-        part->data = NULL;
-        part->dataLength = 0;
-        part->isFile = 0;
+        // Initialization already done by the memset above
         
         int headerEnd = headerStart;
         while (headerEnd < length) {
             // Find end of current header line
             int lineEnd = headerEnd;
-            while (lineEnd < length && !(buffer[lineEnd] == '\r' && lineEnd+1 < length && buffer[lineEnd+1] == '\n')) {
+            while (lineEnd < length && 
+                  !(lineEnd + 1 < length && buffer[lineEnd] == '\r' && buffer[lineEnd+1] == '\n')) {
                 lineEnd++;
             }
             
-            if (lineEnd >= length) break;
+            if (lineEnd >= length) {
+                break;
+            }
             
             // Extract header line
             int lineLength = lineEnd - headerEnd;
@@ -663,6 +1109,11 @@ jobject parseMultipartForm(JNIEnv *env, char* buffer, jint length) {
             
             // Allocate and copy header line for easier processing
             char* headerLine = malloc(lineLength + 1);
+            if (!headerLine) {
+                // Memory allocation failure
+                goto cleanup;
+            }
+            
             memcpy(headerLine, buffer + headerEnd, lineLength);
             headerLine[lineLength] = 0;
             
@@ -678,9 +1129,13 @@ jobject parseMultipartForm(JNIEnv *env, char* buffer, jint length) {
                     char* nameEnd = strchr(nameStart, '"');
                     if (nameEnd) {
                         int nameLen = nameEnd - nameStart;
-                        part->name = malloc(nameLen + 1);
-                        memcpy(part->name, nameStart, nameLen);
-                        part->name[nameLen] = 0;
+                        if (nameLen > 0 && nameLen < 1024) { // Reasonable limit check
+                            part->name = malloc(nameLen + 1);
+                            if (part->name) {
+                                memcpy(part->name, nameStart, nameLen);
+                                part->name[nameLen] = 0;
+                            }
+                        }
                     }
                 }
                 
@@ -691,10 +1146,14 @@ jobject parseMultipartForm(JNIEnv *env, char* buffer, jint length) {
                     char* filenameEnd = strchr(filenameStart, '"');
                     if (filenameEnd) {
                         int filenameLen = filenameEnd - filenameStart;
-                        part->filename = malloc(filenameLen + 1);
-                        memcpy(part->filename, filenameStart, filenameLen);
-                        part->filename[filenameLen] = 0;
-                        part->isFile = 1;
+                        if (filenameLen > 0 && filenameLen < 1024) { // Reasonable limit check
+                            part->filename = malloc(filenameLen + 1);
+                            if (part->filename) {
+                                memcpy(part->filename, filenameStart, filenameLen);
+                                part->filename[filenameLen] = 0;
+                                part->isFile = 1;
+                            }
+                        }
                     }
                 }
             }
@@ -704,9 +1163,13 @@ jobject parseMultipartForm(JNIEnv *env, char* buffer, jint length) {
                 while (*valueStart == ' ' || *valueStart == '\t') valueStart++;
                 
                 int valueLen = strlen(valueStart);
-                part->contentType = malloc(valueLen + 1);
-                memcpy(part->contentType, valueStart, valueLen);
-                part->contentType[valueLen] = 0;
+                if (valueLen > 0 && valueLen < 256) { // Reasonable limit check
+                    part->contentType = malloc(valueLen + 1);
+                    if (part->contentType) {
+                        memcpy(part->contentType, valueStart, valueLen);
+                        part->contentType[valueLen] = 0;
+                    }
+                }
             }
             
             free(headerLine);
@@ -731,13 +1194,25 @@ jobject parseMultipartForm(JNIEnv *env, char* buffer, jint length) {
             }
         }
         
-        // Set content data pointer and length
-        part->data = buffer + contentStart;
-        part->dataLength = nextBoundaryPos - contentStart;
-        
-        // Move to next part
-        partCount++;
-        pos = nextBoundaryPos;
+        // Set content data pointer and length with bounds checking
+        if (contentStart < nextBoundaryPos && nextBoundaryPos <= length) {
+            part->data = buffer + contentStart;
+            part->dataLength = nextBoundaryPos - contentStart;
+            
+            // Move to next part
+            partCount++;
+            pos = nextBoundaryPos;
+        } else {
+            // Invalid data boundaries, skip this part
+            pos = nextBoundaryPos;
+        }
+    }
+    
+    // If no parts were found, return null
+    if (partCount == 0) {
+        free(boundaryStart);
+        free(boundaryEnd);
+        return NULL;
     }
     
     // Allocate memory for serialized parts in a format we can return to Java
@@ -747,7 +1222,7 @@ jobject parseMultipartForm(JNIEnv *env, char* buffer, jint length) {
     // [name][filename][content_type][data]
     
     // Calculate required size
-    int totalSize = 4; // part count
+    size_t totalSize = 4; // part count
     for (int i = 0; i < partCount; i++) {
         MultipartPart* part = &parts[i];
         totalSize += 4 + 4 + 4 + 4 + 1; // lengths and is_file flag
@@ -765,19 +1240,12 @@ jobject parseMultipartForm(JNIEnv *env, char* buffer, jint length) {
     char* result = (char*)malloc(totalSize);
     if (!result) {
         // Clean up parts before returning
-        for (int i = 0; i < partCount; i++) {
-            free(parts[i].name);
-            free(parts[i].filename);
-            free(parts[i].contentType);
-        }
-        free(boundaryStart);
-        free(boundaryEnd);
-        return NULL;
+        goto cleanup;
     }
     
     // Write part count
     *((int*)result) = partCount;
-    int resultPos = 4;
+    size_t resultPos = 4;
     
     // Write each part
     for (int i = 0; i < partCount; i++) {
@@ -799,35 +1267,40 @@ jobject parseMultipartForm(JNIEnv *env, char* buffer, jint length) {
         resultPos += 4;
         result[resultPos++] = part->isFile;
         
-        // Write strings
-        if (nameLen > 0) {
+        // Write strings with bounds checking
+        if (nameLen > 0 && part->name) {
             memcpy(result + resultPos, part->name, nameLen);
             resultPos += nameLen;
         }
         
-        if (filenameLen > 0) {
+        if (filenameLen > 0 && part->filename) {
             memcpy(result + resultPos, part->filename, filenameLen);
             resultPos += filenameLen;
         }
         
-        if (contentTypeLen > 0) {
+        if (contentTypeLen > 0 && part->contentType) {
             memcpy(result + resultPos, part->contentType, contentTypeLen);
             resultPos += contentTypeLen;
         }
         
-        // Write data
-        memcpy(result + resultPos, part->data, part->dataLength);
-        resultPos += part->dataLength;
+        // Write data with bounds checking
+        if (part->dataLength > 0 && part->data) {
+            memcpy(result + resultPos, part->data, part->dataLength);
+            resultPos += part->dataLength;
+        }
         
         // Align to 4 bytes if needed
         while (resultPos % 4 != 0) {
             result[resultPos++] = 0;
         }
-        
-        // Clean up part resources
-        free(part->name);
-        free(part->filename);
-        free(part->contentType);
+    }
+    
+    // Clean up part resources
+    for (int i = 0; i < partCount; i++) {
+        free(parts[i].name);
+        free(parts[i].filename);
+        free(parts[i].contentType);
+        // Note: We don't free part->data as it points into the original buffer
     }
     
     // Clean up temporary allocations
@@ -836,8 +1309,26 @@ jobject parseMultipartForm(JNIEnv *env, char* buffer, jint length) {
     
     // Create a direct ByteBuffer with the result
     jobject resultBuffer = (*env)->NewDirectByteBuffer(env, result, totalSize);
+    if (resultBuffer == NULL) {
+        // Failed to create ByteBuffer, clean up
+        free(result);
+        return NULL;
+    }
     
     return resultBuffer;
+
+cleanup:
+    // Error handling - clean up all allocated resources
+    for (int i = 0; i < MAX_PARTS; i++) {
+        free(parts[i].name);
+        free(parts[i].filename);
+        free(parts[i].contentType);
+        // Note: We don't free part->data as it points into the original buffer
+    }
+    
+    free(boundaryStart);
+    free(boundaryEnd);
+    return NULL;
 }
 
 /**
@@ -870,7 +1361,6 @@ JNIEXPORT jint JNICALL Java_com_blyfast_nativeopt_NativeOptimizer_nativeFastDete
     // Check for form URL-encoded data
     int hasEquals = 0;
     int hasAmpersand = 0;
-    // Keeping textChars for future enhancements
     int textChars = 0;
     int binaryChars = 0;
     
@@ -890,7 +1380,10 @@ JNIEXPORT jint JNICALL Java_com_blyfast_nativeopt_NativeOptimizer_nativeFastDete
     int checkLength = length > 200 ? 200 : length;
     if (binaryChars > checkLength / 10) { // More than 10% binary chars
         return 5; // Binary
-    } else {
+    } else if (textChars > checkLength * 0.9) { // More than 90% text chars
         return 4; // Text
+    } else {
+        // Mixed content, default to text
+        return 4;
     }
 } 

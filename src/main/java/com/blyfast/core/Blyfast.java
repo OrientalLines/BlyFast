@@ -851,7 +851,8 @@ public class Blyfast {
             
             // If we have path parameters, use the regular fast path
             // which handles parameter extraction
-            throw new IllegalStateException("Route has path parameters, cannot use ultra-fast path");
+            logger.debug("Route has path parameters, falling back to normal processing: {}", routePath);
+            processSimpleRequest(exchange);
         }
         
         /**

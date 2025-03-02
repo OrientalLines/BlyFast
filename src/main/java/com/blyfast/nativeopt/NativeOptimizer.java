@@ -5,20 +5,17 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicBoolean;
-import sun.misc.Unsafe;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import com.blyfast.util.NativeLibraryLoader;
 
 /**
  * Provides native optimizations for the BlyFast framework.
- * This class leverages JNI and Unsafe operations to maximize performance.
+ * This class leverages JNI and safe Java APIs to maximize performance.
  */
 public class NativeOptimizer {
     private static final Logger logger = LoggerFactory.getLogger(NativeOptimizer.class);
     private static final AtomicBoolean NATIVE_LOADED = new AtomicBoolean(false);
-    private static final AtomicBoolean UNSAFE_AVAILABLE = new AtomicBoolean(false);
-    private static Unsafe UNSAFE;
     
     // Define OS-specific native library file names
     private static final String LIBRARY_NAME = "blyfastnative";
@@ -31,17 +28,6 @@ public class NativeOptimizer {
             ByteBuffer.allocateDirect(64 * 1024)); // 64KB buffer
 
     static {
-        // Initialize Unsafe for low-level memory operations
-        try {
-            Field field = Unsafe.class.getDeclaredField("theUnsafe");
-            field.setAccessible(true);
-            UNSAFE = (Unsafe) field.get(null);
-            UNSAFE_AVAILABLE.set(true);
-            logger.debug("Initialized Unsafe for low-level memory operations");
-        } catch (Exception e) {
-            logger.warn("Failed to initialize Unsafe. Some optimizations will be disabled.", e);
-        }
-        
         // Try to load native library
         try {
             loadNativeLibrary();
@@ -243,8 +229,8 @@ public class NativeOptimizer {
     private static native ByteBuffer nativeStringToBytes(String input);
     
     /**
-     * Optimized memory operations using Unsafe.
-     * Copies source array to destination without bounds checking.
+     * Optimized memory operations using System.arraycopy.
+     * Copies source array to destination.
      * 
      * @param src source array
      * @param srcPos starting position in the source array
@@ -252,48 +238,18 @@ public class NativeOptimizer {
      * @param destPos starting position in the destination array
      * @param length the number of elements to be copied
      */
-    public static void unsafeCopyMemory(byte[] src, int srcPos, byte[] dest, int destPos, int length) {
-        if (UNSAFE_AVAILABLE.get()) {
-            long srcOffset = Unsafe.ARRAY_BYTE_BASE_OFFSET + srcPos;
-            long destOffset = Unsafe.ARRAY_BYTE_BASE_OFFSET + destPos;
-            UNSAFE.copyMemory(src, srcOffset, dest, destOffset, length);
-        } else {
-            // Fallback to System.arraycopy
-            System.arraycopy(src, srcPos, dest, destPos, length);
-        }
+    public static void fastCopyMemory(byte[] src, int srcPos, byte[] dest, int destPos, int length) {
+        System.arraycopy(src, srcPos, dest, destPos, length);
     }
     
     /**
-     * Optimized array allocation using Unsafe.
+     * Allocate a byte array of specified size.
      * 
      * @param size the size of the array to allocate
      * @return a new byte array
      */
-    public static byte[] unsafeAllocateByteArray(int size) {
-        if (UNSAFE_AVAILABLE.get()) {
-            try {
-                // Allocate array without zeroing memory in newer JDKs if available
-                // Try reflection for JDK9+ method first
-                try {
-                    Method allocateUninitializedArray = Unsafe.class.getMethod(
-                        "allocateUninitializedArray", Class.class, int.class);
-                    return (byte[]) allocateUninitializedArray.invoke(UNSAFE, byte.class, size);
-                } catch (NoSuchMethodException e) {
-                    // Fall back to allocateInstance for older JDKs (less efficient)
-                    byte[] array = (byte[]) UNSAFE.allocateInstance(byte[].class);
-                    Field lengthField = byte[].class.getDeclaredField("length");
-                    // Use unsafe to set the length field
-                    long lengthOffset = UNSAFE.objectFieldOffset(lengthField);
-                    UNSAFE.putInt(array, lengthOffset, size);
-                    return array;
-                }
-            } catch (Exception e) {
-                // Fallback to standard allocation
-                return new byte[size];
-            }
-        } else {
-            return new byte[size];
-        }
+    public static byte[] allocateByteArray(int size) {
+        return new byte[size];
     }
     
     /**
@@ -303,15 +259,6 @@ public class NativeOptimizer {
      */
     public static boolean isNativeOptimizationAvailable() {
         return NATIVE_LOADED.get();
-    }
-    
-    /**
-     * Returns whether Unsafe optimizations are available.
-     * 
-     * @return true if Unsafe is available
-     */
-    public static boolean isUnsafeAvailable() {
-        return UNSAFE_AVAILABLE.get();
     }
 
     /**

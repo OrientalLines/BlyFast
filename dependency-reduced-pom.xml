@@ -17,8 +17,7 @@
         <artifactId>maven-compiler-plugin</artifactId>
         <version>3.11.0</version>
         <configuration>
-          <source>${java.version}</source>
-          <target>${java.version}</target>
+          <release>${java.version}</release>
         </configuration>
       </plugin>
       <plugin>
@@ -88,6 +87,14 @@
                 <transformer>
                   <mainClass>com.blyfast.example.BenchApp</mainClass>
                 </transformer>
+                <transformer />
+                <transformer />
+                <transformer>
+                  <addHeader>false</addHeader>
+                </transformer>
+                <transformer>
+                  <resource>META-INF/MANIFEST.MF</resource>
+                </transformer>
               </transformers>
               <filters>
                 <filter>
@@ -96,9 +103,19 @@
                     <exclude>META-INF/*.SF</exclude>
                     <exclude>META-INF/*.DSA</exclude>
                     <exclude>META-INF/*.RSA</exclude>
+                    <exclude>module-info.class</exclude>
+                    <exclude>META-INF/versions/*/module-info.class</exclude>
+                    <exclude>META-INF/LICENSE.txt</exclude>
+                    <exclude>META-INF/NOTICE.txt</exclude>
+                    <exclude>META-INF/DEPENDENCIES</exclude>
+                    <exclude>META-INF/MANIFEST.MF</exclude>
                   </excludes>
                 </filter>
               </filters>
+              <shadedArtifactAttached>false</shadedArtifactAttached>
+              <createDependencyReducedPom>true</createDependencyReducedPom>
+              <minimizeJar>false</minimizeJar>
+              <transformWarn>false</transformWarn>
             </configuration>
           </execution>
         </executions>

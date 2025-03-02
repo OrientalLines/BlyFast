@@ -1,7 +1,6 @@
 package com.blyfast.example;
 
 import com.blyfast.core.Blyfast;
-import com.blyfast.core.ThreadPool;
 import com.fasterxml.jackson.annotation.JsonProperty;
 
 import java.sql.Connection;
