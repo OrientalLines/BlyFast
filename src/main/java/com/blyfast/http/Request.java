@@ -632,8 +632,6 @@ public class Request {
             // Prepare boundary markers
             String startBoundary = "--" + boundary;
             String endBoundary = "--" + boundary + "--";
-            byte[] startBoundaryBytes = startBoundary.getBytes(StandardCharsets.UTF_8);
-            byte[] endBoundaryBytes = endBoundary.getBytes(StandardCharsets.UTF_8);
             
             // Convert body to string for easier parsing
             String bodyStr = new String(bodyBytes, StandardCharsets.ISO_8859_1);

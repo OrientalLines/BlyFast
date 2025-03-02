@@ -486,10 +486,10 @@ public class ThreadPool {
      */
     public static class ThreadPoolConfig {
         // Thread pool sizing - extreme optimization for throughput
-        private int corePoolSize = Runtime.getRuntime().availableProcessors() * 16; // Doubled again from 8x
-        private int maxPoolSize = Runtime.getRuntime().availableProcessors() * 32; // Doubled again from 16x
-        private int queueCapacity = 500000; // More than doubled from 200000
-        private Duration keepAliveTime = Duration.ofSeconds(20); // Reduced further from 30 seconds
+        private int corePoolSize = Runtime.getRuntime().availableProcessors();
+        private int maxPoolSize = Runtime.getRuntime().availableProcessors() * 2;
+        private int queueCapacity = 500000;
+        private Duration keepAliveTime = Duration.ofSeconds(20);
 
         // Thread configuration
         private int threadPriority = Thread.NORM_PRIORITY;

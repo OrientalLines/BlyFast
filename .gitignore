@@ -1,2 +1,9 @@
 target
 .vscode
+.DS_Store
+.gradle
+.idea
+.vscode
+*.dylib
+*.so
+*.dll

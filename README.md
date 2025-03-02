@@ -4,13 +4,16 @@ A blazingly fast Java framework for REST APIs, inspired by GoFiber and Express.j
 
 ## Features
 
-- Extremely fast HTTP request handling with optimized thread pool
+- Extremely fast HTTP request handling with advanced thread pool optimization
+- Adaptive resource management for high-performance applications
 - Simple and intuitive API for defining routes and middleware
-- Plugin system for extending functionality
+- Robust plugin system for extending functionality
 - JSON processing with Jackson
-- Path parameter support
-- Middleware support
+- Path parameter support with efficient routing
+- Comprehensive middleware support with async options
+- Circuit breaker pattern for enhanced reliability
 - Built on top of Undertow for maximum performance
+- Object pooling for reduced GC pressure
 
 ## Getting Started
 
@@ -23,6 +26,32 @@ A blazingly fast Java framework for REST APIs, inspired by GoFiber and Express.j
 
 ```bash
 mvn clean package
+```
+
+### Basic Usage
+
+Create a simple API server with just a few lines of code:
+
+```java
+public class ExampleApp {
+    public static void main(String[] args) {
+        // Create the application
+        Blyfast app = new Blyfast();
+
+        // Add global middleware for all routes
+        app.use(CommonMiddleware.logger());
+        app.use(CommonMiddleware.responseTime());
+        
+        // Define routes
+        app.get("/hello", ctx -> {
+            ctx.json(Map.of("message", "Hello, World!"));
+        });
+        
+        // Start the server
+        app.port(8080).listen();
+        System.out.println("Server started on http://localhost:8080");
+    }
+}
 ```
 
 ## Middleware
@@ -58,6 +87,7 @@ You can add middleware to your application in several ways:
 // Log all requests
 app.use(ctx -> {
     System.out.println("Request received: " + ctx.request().getMethod() + " " + ctx.request().getPath());
+    return true;
 });
 ```
 
@@ -69,8 +99,9 @@ app.get("/admin", ctx -> {
     String token = ctx.header("Authorization");
     if (token == null || !isValidToken(token)) {
         ctx.status(401).json(Map.of("error", "Unauthorized"));
-        return; // Stop middleware chain
+        return false; // Stop middleware chain
     }
+    return true;
 }, ctx -> {
     ctx.json(Map.of("message", "Admin dashboard"));
 });
@@ -101,11 +132,14 @@ app.get("/profile", auth, ctx -> {
 
 ### Common Middleware Examples
 
-- **Logging middleware**: Logs request details
-- **Authentication middleware**: Verifies user credentials
-- **Error handling middleware**: Catches exceptions and returns appropriate responses
-- **Request parsing middleware**: Parses request bodies
-- **Response transformation middleware**: Transforms response data
+BlyFast includes several built-in middleware functions in the `CommonMiddleware` class:
+
+- **logger()**: Logs request details
+- **responseTime()**: Adds response time metrics
+- **cors()**: Handles Cross-Origin Resource Sharing
+- **securityHeaders()**: Adds security-related headers
+- **bodyParser()**: Parses request bodies for various content types
+- **errorHandler()**: Catches exceptions and returns appropriate responses
 
 ## Plugins
 
@@ -148,12 +182,14 @@ BlyFast includes several built-in plugins:
 
 1. **JWT Authentication** - Handles JSON Web Token authentication
 2. **CORS** - Manages Cross-Origin Resource Sharing
-3. **Rate Limiting** - Limits request rates
-4. **Compression** - Compresses HTTP responses
+3. **Rate Limiting** - Limits request rates to protect your API
+4. **Compression** - Compresses HTTP responses for better performance
+5. **Exception Handler** - Advanced error handling and reporting
+6. **Monitor** - Performance monitoring and metrics collection
 
 ### Using Plugins
 
-Plugins are registered with the application and often create middlewares that are added to the middleware chain:
+Plugins are registered with the application:
 
 ```java
 // Create and configure the CORS plugin
@@ -176,47 +212,9 @@ app.register(jwtPlugin);
 
 // Protect routes with JWT middleware
 Middleware jwtProtect = jwtPlugin.protect();
-app.get("/protected", ctx -> {
-    // Apply JWT middleware
-    if (!jwtProtect.handle(ctx)) {
-        return; // Authentication failed
-    }
-    
+app.get("/protected", jwtProtect, ctx -> {
     // This route is protected by JWT authentication
     ctx.json(Map.of("message", "Protected route"));
-});
-```
-
-### Compression Plugin Example
-
-The Compression plugin provides response compression capabilities:
-
-```java
-// Create with default configuration
-CompressionPlugin compressionPlugin = new CompressionPlugin();
-
-// Or with custom configuration
-CompressionPlugin compressionPlugin = new CompressionPlugin();
-compressionPlugin.getConfig()
-    .setEnableGzip(true)
-    .setEnableDeflate(false)
-    .setMinLength(512)
-    .addExcludedPath(".*/images/.*")
-    .addIncludedContentType("application/json");
-
-// Register the plugin
-app.register(compressionPlugin);
-
-// Apply compression to specific routes if global is disabled
-Middleware compressionMiddleware = compressionPlugin.createMiddleware();
-app.get("/api/data", ctx -> {
-    // Apply compression middleware
-    if (!compressionMiddleware.handle(ctx)) {
-        return;
-    }
-    
-    // Response will be compressed
-    ctx.json(largeDataObject);
 });
 ```
 
@@ -259,99 +257,20 @@ public class MyCustomPlugin extends AbstractPlugin {
 }
 ```
 
-### Plugin vs Middleware: Key Differences
+## Advanced Features
 
-| Aspect | Middleware | Plugin |
-|--------|------------|--------|
-| Complexity | Simple function | Complex component |
-| State | Typically stateless | Can maintain state |
-| Configuration | Limited/none | Often configurable |
-| Registration | `app.use()` | `app.register()` |
-| Scope | Either global or route-specific | Can provide both |
-| Implementation | Functional interface | Class implementation |
-| Reusability | Simple reuse | Creates reusable middleware |
-| Purpose | Request/response processing | Framework extension |
-
-## Running Tests
-
-BlyFast includes a comprehensive test suite to ensure everything works correctly. To run the tests:
-
-```bash
-mvn test
-```
-
-This will run all the JUnit tests, including:
-- Core functionality tests
-- Thread pool tests
-- Plugin tests
-
-## Performance Benchmarks
-
-### Running the Thread Pool Benchmark
-
-The `ThreadPoolBenchmark` class demonstrates the performance of different thread pool configurations:
-
-```bash
-mvn exec:java -Dexec.mainClass="com.blyfast.example.ThreadPoolBenchmark"
-```
-
-This benchmark compares:
-1. Default thread pool configuration
-2. Optimized thread pool configuration
-3. Work-stealing thread pool configuration
-
-### Comparing with Spring Boot
-
-To compare BlyFast performance with Spring Boot:
-
-1. Run the BlyFast comparison server:
-
-```bash
-mvn exec:java -Dexec.mainClass="com.blyfast.example.SpringComparisonBenchmark"
-```
-
-2. Create a Spring Boot application with equivalent endpoints (example provided in the console output)
-
-3. Run the Spring Boot application on port 8081
-
-4. The benchmark will automatically run when both servers are detected
-
-## Example Applications
-
-### Plugin Example
-
-The `PluginExampleApp` demonstrates how to use various plugins:
-
-```bash
-mvn exec:java -Dexec.mainClass="com.blyfast.example.PluginExampleApp"
-```
-
-### JWT and CORS Example
-
-The `JwtCorsExampleApp` provides a focused example of JWT authentication and CORS configuration:
-
-```bash
-mvn exec:java -Dexec.mainClass="com.blyfast.example.JwtCorsExampleApp"
-```
-
-This example demonstrates:
-- Setting up JWT authentication with custom configuration
-- Implementing login functionality with JWT token generation
-- Creating protected routes with role-based access control
-- Configuring CORS for secure cross-origin requests
-- Testing endpoints with curl commands
-
-## Thread Pool Configuration
+### Thread Pool Configuration
 
 BlyFast includes a highly optimized thread pool for handling HTTP requests. You can configure it to match your specific workload:
 
 ```java
 ThreadPool.ThreadPoolConfig config = new ThreadPool.ThreadPoolConfig()
-    .setCorePoolSize(Runtime.getRuntime().availableProcessors() * 2)
-    .setMaxPoolSize(Runtime.getRuntime().availableProcessors() * 4)
-    .setQueueCapacity(10000)
+    .setCorePoolSize(Runtime.getRuntime().availableProcessors() * 16)
+    .setMaxPoolSize(Runtime.getRuntime().availableProcessors() * 32)
+    .setQueueCapacity(500000)
     .setPrestartCoreThreads(true)
-    .setUseSynchronousQueue(false);
+    .setUseSynchronousQueue(false)
+    .setEnableDynamicScaling(true);
 
 Blyfast app = new Blyfast(config);
 ```
@@ -365,18 +284,115 @@ Blyfast app = new Blyfast(config);
 - **Use Work Stealing**: Whether to use a work-stealing pool for better load balancing
 - **Use Synchronous Queue**: Whether to use a synchronous handoff queue instead of a bounded queue
 - **Prestart Core Threads**: Whether to prestart all core threads to eliminate warmup time
-- **Caller Runs When Rejected**: Whether to execute tasks in the caller's thread when the queue is full
+- **Enable Dynamic Scaling**: Automatically adjust thread counts based on workload
+- **Adaptive Queue**: Dynamically adjust queue size based on demand
+
+### Circuit Breaker Pattern
+
+BlyFast supports the circuit breaker pattern to enhance system reliability:
+
+```java
+app.circuitBreaker(true)
+   .circuitBreakerThreshold(50)
+   .circuitBreakerResetTimeout(30000);
+```
+
+When the error threshold is exceeded, the circuit opens and fast-fails requests until the reset timeout expires, protecting downstream systems.
+
+### Object Pooling
+
+BlyFast uses object pooling to reduce garbage collection pressure:
+
+```java
+// Enable or disable object pooling (enabled by default)
+Blyfast app = new Blyfast(true);
+
+// Configure adaptive pool sizing
+app.adaptivePoolSizing(true);
+app.poolSize(2000);
+```
+
+Object pooling reuses request, response, and context objects to minimize object creation and reduce GC pauses.
+
+### Async Middleware
+
+For non-blocking operations, BlyFast supports asynchronous middleware execution:
+
+```java
+app.asyncMiddleware(true);
+
+// Use async middleware
+app.use(ctx -> {
+    CompletableFuture.runAsync(() -> {
+        // Perform async operation
+    });
+    return true;
+});
+```
+
+## Performance Benchmarks
+
+BlyFast is designed for maximum performance. The `ThreadPoolBenchmark` class demonstrates the performance of different thread pool configurations:
+
+```bash
+mvn exec:java -Dexec.mainClass="com.blyfast.example.ThreadPoolBenchmark"
+```
+
+This benchmark compares:
+1. Default thread pool configuration
+2. Optimized thread pool configuration 
+3. Work-stealing thread pool configuration
+
+## Example Applications
+
+The framework includes several example applications to help you get started:
+
+### Basic Example
+
+```java
+// Simple API with basic routes
+mvn exec:java -Dexec.mainClass="com.blyfast.example.ExampleApp"
+```
+
+### Plugin Example
+
+```java
+// Demonstrates how to use various plugins
+mvn exec:java -Dexec.mainClass="com.blyfast.example.PluginExampleApp"
+```
+
+### JWT and CORS Example
+
+```java
+// Demonstrates JWT authentication and CORS configuration
+mvn exec:java -Dexec.mainClass="com.blyfast.example.JwtCorsExampleApp"
+```
+
+### File System Example
+
+```java
+// Demonstrates serving static files
+mvn exec:java -Dexec.mainClass="com.blyfast.example.FileSystemExample"
+```
+
+### Benchmark Application
+
+```java
+// Performance benchmarking application
+mvn exec:java -Dexec.mainClass="com.blyfast.example.BenchApp"
+```
 
 ## Performance Tuning Tips
 
 For maximum performance:
 
-1. **Adjust Thread Pool Size**: Set core threads to CPU cores × 2 and max threads to CPU cores × 4
+1. **Adjust Thread Pool Size**: Set core threads to CPU cores × 16 and max threads to CPU cores × 32
 2. **Prestart Core Threads**: Eliminate thread creation overhead on first requests
 3. **Use Work Stealing for CPU-bound Tasks**: Better load balancing for CPU-intensive operations
 4. **Use Bounded Queue for I/O-bound Tasks**: Better throughput for I/O-bound operations
-5. **Tune Queue Capacity**: Match your expected concurrent request volume
-6. **Disable Metrics Collection in Production**: Reduce overhead if metrics aren't needed
+5. **Tune Queue Capacity**: Higher values (500000+) for high-throughput applications
+6. **Enable Dynamic Scaling**: Let the framework optimize thread counts automatically
+7. **Disable Metrics Collection in Production**: Reduce overhead if metrics aren't needed
 
 ## License
 
