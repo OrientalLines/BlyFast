@@ -144,8 +144,8 @@ public class JwtPlugin extends AbstractPlugin {
         long now = System.currentTimeMillis();
 
         JwtBuilder builder = Jwts.builder()
-                .setSubject(subject)
-                .setIssuedAt(new Date(now));
+                .subject(subject)
+                .issuedAt(new Date(now));
 
         // Add custom claims
         for (Map.Entry<String, Object> entry : claims.entrySet()) {
@@ -154,7 +154,7 @@ public class JwtPlugin extends AbstractPlugin {
 
         // Set expiration if configured
         if (config.getExpirationMs() > 0) {
-            builder.setExpiration(new Date(now + config.getExpirationMs()));
+            builder.expiration(new Date(now + config.getExpirationMs()));
         }
 
         return builder.signWith(secretKey).compact();
@@ -162,17 +162,17 @@ public class JwtPlugin extends AbstractPlugin {
 
     /**
      * Validates a JWT token and returns the claims.
-     * 
+     *
      * @param token the token to validate
      * @return the claims
      * @throws JwtException if the token is invalid
      */
     public Claims validateToken(String token) throws JwtException {
-        return Jwts.parserBuilder()
-                .setSigningKey(secretKey)
+        return Jwts.parser()
+                .verifyWith(secretKey)
                 .build()
-                .parseClaimsJws(token)
-                .getBody();
+                .parseSignedClaims(token)
+                .getPayload();
     }
 
     /**
