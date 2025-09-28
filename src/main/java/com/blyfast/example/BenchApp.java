@@ -2,6 +2,8 @@ package com.blyfast.example;
 
 import com.blyfast.core.Blyfast;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
@@ -11,7 +13,6 @@ import java.sql.Statement;
 import java.sql.Timestamp;
 import java.util.HashMap;
 import java.util.Map;
-import org.postgresql.ds.PGPoolingDataSource;
 
 /**
  * High-performance benchmark application for database operations
@@ -19,7 +20,7 @@ import org.postgresql.ds.PGPoolingDataSource;
  */
 public class BenchApp {
     // Connection pool
-    private static PGPoolingDataSource connectionPool;
+    private static HikariDataSource connectionPool;
 
     // Request class for insert operations
     public static class InsertRequest {
@@ -161,17 +162,33 @@ public class BenchApp {
      */
     private static void initConnectionPool() {
         try {
-            // Use PGPoolingDataSource for high-performance connection pooling
-            connectionPool = new PGPoolingDataSource();
-            connectionPool.setServerName("localhost");
-            connectionPool.setDatabaseName("postgres");
-            connectionPool.setUser("postgres");
-            connectionPool.setPassword("postgres");
-            connectionPool.setPortNumber(5432);
+            // Configure HikariCP for high-performance connection pooling
+            HikariConfig config = new HikariConfig();
+            config.setJdbcUrl("jdbc:postgresql://localhost:5432/postgres");
+            config.setUsername("postgres");
+            config.setPassword("postgres");
 
-            // Optimize connection pool settings
-            connectionPool.setInitialConnections(10);
-            connectionPool.setMaxConnections(50);
+            // Optimize connection pool settings for high performance
+            config.setMaximumPoolSize(50);
+            config.setMinimumIdle(10);
+            config.setConnectionTimeout(30000);
+            config.setIdleTimeout(600000);
+            config.setMaxLifetime(1800000);
+            config.setLeakDetectionThreshold(60000);
+
+            // Performance optimizations
+            config.addDataSourceProperty("cachePrepStmts", "true");
+            config.addDataSourceProperty("prepStmtCacheSize", "250");
+            config.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
+            config.addDataSourceProperty("useServerPrepStmts", "true");
+            config.addDataSourceProperty("useLocalSessionState", "true");
+            config.addDataSourceProperty("rewriteBatchedStatements", "true");
+            config.addDataSourceProperty("cacheResultSetMetadata", "true");
+            config.addDataSourceProperty("cacheServerConfiguration", "true");
+            config.addDataSourceProperty("elideSetAutoCommits", "true");
+            config.addDataSourceProperty("maintainTimeStats", "false");
+
+            connectionPool = new HikariDataSource(config);
 
             // Initialize database schema with one connection
             try (Connection conn = connectionPool.getConnection();

@@ -5,8 +5,6 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.lang.reflect.Field;
-import java.lang.reflect.Method;
 import com.blyfast.util.NativeLibraryLoader;
 
 /**

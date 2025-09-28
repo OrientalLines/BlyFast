@@ -438,10 +438,10 @@ public class BlyFastTest {
                 .build();
 
         HttpResponse<String> response3 = httpClient.send(request3, HttpResponse.BodyHandlers.ofString());
-        
+
         // The boolean values will be processed by the queryParams method which will return a map
         assertEquals(200, response3.statusCode());
-        String body3 = response3.body();
+        // Response body is not used in this test
         
         // Test individual boolean value
         app.get("/boolean-test", ctx -> {

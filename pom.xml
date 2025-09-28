@@ -34,6 +34,13 @@
             <version>42.6.0</version>
         </dependency>
 
+        <!-- HikariCP Connection Pooling -->
+        <dependency>
+            <groupId>com.zaxxer</groupId>
+            <artifactId>HikariCP</artifactId>
+            <version>5.0.1</version>
+        </dependency>
+
         <!-- JSON Processing -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
@@ -127,7 +134,7 @@
                     <!-- Compile native libraries -->
                     <execution>
                         <id>compile-native</id>
-                        <phase>process-classes</phase>
+                        <phase>compile</phase>
                         <goals>
                             <goal>exec</goal>
                         </goals>

@@ -100,11 +100,12 @@ public class ThreadPoolBenchmark {
             threadPool.execute(() -> {
                 try {
                     // Simulate a request with some CPU-bound work
-                    long result = 0;
                     for (int j = 0; j < ITERATIONS_PER_REQUEST; j++) {
-                        result += (taskId * j) % 100;
+                        // Perform some calculation to simulate CPU work
+                        @SuppressWarnings("unused")
+                        long calculation = (taskId * j) % 100;
                     }
-                    
+
                     // Task completed successfully
                     successCount.incrementAndGet();
                 } catch (Exception e) {

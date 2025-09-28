@@ -3,7 +3,6 @@ package com.blyfast.core;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
-import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
@@ -166,7 +165,7 @@ public class ThreadPoolTest {
         assertTrue(startedLatch.await(5, TimeUnit.SECONDS));
         
         // Shutdown the thread pool immediately
-        List<Runnable> _unexecutedTasks = threadPool.shutdownNow();
+        threadPool.shutdownNow();
         
         // Verify that the thread pool is shutting down
         assertTrue(threadPool.getExecutor().isShutdown());
