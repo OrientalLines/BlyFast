@@ -1,5 +1,8 @@
 package com.blyfast.core;
 
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
@@ -11,114 +14,178 @@ import java.util.concurrent.atomic.AtomicInteger;
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Tests for the ThreadPool implementation.
+ * Comprehensive tests for the ThreadPool implementation.
+ * 
+ * <p>These tests verify thread pool configuration, task execution,
+ * concurrency handling, shutdown behavior, and work-stealing capabilities.</p>
  */
+@DisplayName("ThreadPool Implementation Tests")
 public class ThreadPoolTest {
     
-    @Test
-    public void testCustomConfiguration() {
-        ThreadPool.ThreadPoolConfig config = new ThreadPool.ThreadPoolConfig()
-                .setCorePoolSize(4)
-                .setMaxPoolSize(8)
-                .setQueueCapacity(100)
-                .setKeepAliveTime(Duration.ofSeconds(30))
-                .setCollectMetrics(false);
-        
-        ThreadPool threadPool = new ThreadPool(config);
-        
-        assertEquals(4, threadPool.getConfig().getCorePoolSize());
-        assertEquals(8, threadPool.getConfig().getMaxPoolSize());
-        assertEquals(100, threadPool.getConfig().getQueueCapacity());
-        assertEquals(Duration.ofSeconds(30), threadPool.getConfig().getKeepAliveTime());
-        assertFalse(threadPool.getConfig().isCollectMetrics());
-        
-        threadPool.shutdown();
+    // Test configuration constants
+    private static final int CUSTOM_CORE_POOL_SIZE = 4;
+    private static final int CUSTOM_MAX_POOL_SIZE = 8;
+    private static final int CUSTOM_QUEUE_CAPACITY = 100;
+    private static final Duration CUSTOM_KEEP_ALIVE_TIME = Duration.ofSeconds(30);
+    private static final int TASK_COUNT_SMALL = 10;
+    private static final int TASK_COUNT_MEDIUM = 100;
+    private static final int TASK_EXECUTION_DELAY_MS = 100;
+    private static final int SHORT_TIMEOUT_SECONDS = 5;
+    private static final int MEDIUM_TIMEOUT_SECONDS = 10;
+    
+    private ThreadPool threadPool;
+    
+    @BeforeEach
+    void setUp() {
+        // Each test gets a fresh thread pool instance
+        threadPool = null;
+    }
+    
+    @AfterEach
+    void tearDown() {
+        // Clean up thread pool after each test
+        if (threadPool != null) {
+            try {
+                threadPool.shutdown();
+                threadPool.awaitTermination(SHORT_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                threadPool.shutdownNow();
+            }
+        }
+    }
+    
+    /**
+     * Helper method to create a default thread pool.
+     */
+    private ThreadPool createDefaultThreadPool() {
+        threadPool = new ThreadPool();
+        return threadPool;
+    }
+    
+    /**
+     * Helper method to create a thread pool with custom configuration.
+     */
+    private ThreadPool createCustomThreadPool(ThreadPool.ThreadPoolConfig config) {
+        threadPool = new ThreadPool(config);
+        return threadPool;
+    }
+    
+    /**
+     * Helper method to wait for a latch with timeout.
+     */
+    private void awaitLatch(CountDownLatch latch, int timeoutSeconds) throws InterruptedException {
+        assertTrue(latch.await(timeoutSeconds, TimeUnit.SECONDS),
+                "Latch should complete within timeout");
     }
     
     @Test
-    public void testTaskExecution() throws Exception {
-        ThreadPool threadPool = new ThreadPool();
+    @DisplayName("Should create thread pool with custom configuration")
+    void testCustomConfiguration() {
+        // Given: custom thread pool configuration
+        ThreadPool.ThreadPoolConfig config = new ThreadPool.ThreadPoolConfig()
+                .setCorePoolSize(CUSTOM_CORE_POOL_SIZE)
+                .setMaxPoolSize(CUSTOM_MAX_POOL_SIZE)
+                .setQueueCapacity(CUSTOM_QUEUE_CAPACITY)
+                .setKeepAliveTime(CUSTOM_KEEP_ALIVE_TIME)
+                .setCollectMetrics(false);
         
-        // Execute a simple task
+        // When: thread pool is created with custom config
+        ThreadPool pool = createCustomThreadPool(config);
+        
+        // Then: configuration should be applied correctly
+        assertEquals(CUSTOM_CORE_POOL_SIZE, pool.getConfig().getCorePoolSize());
+        assertEquals(CUSTOM_MAX_POOL_SIZE, pool.getConfig().getMaxPoolSize());
+        assertEquals(CUSTOM_QUEUE_CAPACITY, pool.getConfig().getQueueCapacity());
+        assertEquals(CUSTOM_KEEP_ALIVE_TIME, pool.getConfig().getKeepAliveTime());
+        assertFalse(pool.getConfig().isCollectMetrics());
+    }
+    
+    @Test
+    @DisplayName("Should execute Runnable tasks successfully")
+    void testTaskExecution() throws Exception {
+        // Given: a thread pool and a task
+        ThreadPool pool = createDefaultThreadPool();
         AtomicInteger result = new AtomicInteger(0);
         CountDownLatch latch = new CountDownLatch(1);
+        int expectedValue = 42;
         
-        threadPool.execute(() -> {
-            result.set(42);
+        // When: task is executed
+        pool.execute(() -> {
+            result.set(expectedValue);
             latch.countDown();
         });
         
-        // Wait for the task to complete
-        assertTrue(latch.await(5, TimeUnit.SECONDS));
-        assertEquals(42, result.get());
+        // Then: task should complete successfully
+        awaitLatch(latch, SHORT_TIMEOUT_SECONDS);
+        assertEquals(expectedValue, result.get());
         
         // Verify metrics
-        assertEquals(1, threadPool.getTasksSubmitted());
-        assertEquals(1, threadPool.getTasksCompleted());
-        assertEquals(0, threadPool.getTasksRejected());
-        
-        threadPool.shutdown();
+        assertEquals(1, pool.getTasksSubmitted());
+        assertEquals(1, pool.getTasksCompleted());
+        assertEquals(0, pool.getTasksRejected());
     }
     
     @Test
-    public void testSubmitCallable() throws Exception {
-        ThreadPool threadPool = new ThreadPool();
+    @DisplayName("Should submit Callable tasks and return Future results")
+    void testSubmitCallable() throws Exception {
+        // Given: a thread pool and a callable task
+        ThreadPool pool = createDefaultThreadPool();
+        int expectedResult = 42;
         
-        // Submit a callable task
-        Future<Integer> future = threadPool.submit(() -> {
-            Thread.sleep(100); // Simulate some work
-            return 42;
+        // When: callable is submitted
+        Future<Integer> future = pool.submit(() -> {
+            Thread.sleep(TASK_EXECUTION_DELAY_MS);
+            return expectedResult;
         });
         
-        // Get the result
-        assertEquals(42, future.get(5, TimeUnit.SECONDS));
+        // Then: future should return correct result
+        assertEquals(expectedResult, future.get(SHORT_TIMEOUT_SECONDS, TimeUnit.SECONDS));
         
         // Verify metrics
-        assertEquals(1, threadPool.getTasksSubmitted());
-        assertEquals(1, threadPool.getTasksCompleted());
-        
-        threadPool.shutdown();
+        assertEquals(1, pool.getTasksSubmitted());
+        assertEquals(1, pool.getTasksCompleted());
     }
     
     @Test
-    public void testMultipleTasks() throws Exception {
-        ThreadPool threadPool = new ThreadPool();
-        
-        int numTasks = 100;
+    @DisplayName("Should handle multiple concurrent tasks")
+    void testMultipleTasks() throws Exception {
+        // Given: a thread pool and multiple tasks
+        ThreadPool pool = createDefaultThreadPool();
+        int numTasks = TASK_COUNT_MEDIUM;
         CountDownLatch latch = new CountDownLatch(numTasks);
         AtomicInteger counter = new AtomicInteger(0);
         
-        // Submit multiple tasks
+        // When: multiple tasks are submitted
         for (int i = 0; i < numTasks; i++) {
-            threadPool.execute(() -> {
+            pool.execute(() -> {
                 counter.incrementAndGet();
                 latch.countDown();
             });
         }
         
-        // Wait for all tasks to complete
-        assertTrue(latch.await(10, TimeUnit.SECONDS));
+        // Then: all tasks should complete successfully
+        awaitLatch(latch, MEDIUM_TIMEOUT_SECONDS);
         assertEquals(numTasks, counter.get());
         
         // Verify metrics
-        assertEquals(numTasks, threadPool.getTasksSubmitted());
-        assertEquals(numTasks, threadPool.getTasksCompleted());
-        
-        threadPool.shutdown();
+        assertEquals(numTasks, pool.getTasksSubmitted());
+        assertEquals(numTasks, pool.getTasksCompleted());
     }
     
     @Test
-    public void testShutdown() throws Exception {
-        ThreadPool threadPool = new ThreadPool();
-        
-        // Submit some tasks
-        int numTasks = 10;
+    @DisplayName("Should shutdown gracefully and complete pending tasks")
+    void testShutdown() throws Exception {
+        // Given: a thread pool with running tasks
+        ThreadPool pool = createDefaultThreadPool();
+        int numTasks = TASK_COUNT_SMALL;
         CountDownLatch latch = new CountDownLatch(numTasks);
         
+        // When: tasks are submitted and pool is shut down
         for (int i = 0; i < numTasks; i++) {
-            threadPool.execute(() -> {
+            pool.execute(() -> {
                 try {
-                    Thread.sleep(100); // Simulate some work
+                    Thread.sleep(TASK_EXECUTION_DELAY_MS);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                 } finally {
@@ -127,75 +194,78 @@ public class ThreadPoolTest {
             });
         }
         
-        // Shutdown the thread pool
-        threadPool.shutdown();
+        pool.shutdown();
         
-        // Wait for tasks to complete
-        assertTrue(latch.await(5, TimeUnit.SECONDS));
-        assertTrue(threadPool.awaitTermination(5, TimeUnit.SECONDS));
+        // Then: all tasks should complete and pool should terminate
+        awaitLatch(latch, SHORT_TIMEOUT_SECONDS);
+        assertTrue(pool.awaitTermination(SHORT_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                "Thread pool should terminate gracefully");
         
         // Verify metrics
-        assertEquals(numTasks, threadPool.getTasksSubmitted());
-        assertEquals(numTasks, threadPool.getTasksCompleted());
+        assertEquals(numTasks, pool.getTasksSubmitted());
+        assertEquals(numTasks, pool.getTasksCompleted());
     }
     
     @Test
-    public void testShutdownNow() throws Exception {
-        ThreadPool threadPool = new ThreadPool();
-        
-        // Submit some long-running tasks
-        int numTasks = 10;
+    @DisplayName("Should shutdown immediately and interrupt running tasks")
+    void testShutdownNow() throws Exception {
+        // Given: a thread pool with long-running tasks
+        ThreadPool pool = createDefaultThreadPool();
+        int numTasks = TASK_COUNT_SMALL;
         CountDownLatch startedLatch = new CountDownLatch(numTasks);
         CountDownLatch blockLatch = new CountDownLatch(1);
         
+        // When: long-running tasks are submitted
         for (int i = 0; i < numTasks; i++) {
-            threadPool.execute(() -> {
+            pool.execute(() -> {
                 startedLatch.countDown();
                 try {
                     // Wait indefinitely or until interrupted
                     blockLatch.await();
                 } catch (InterruptedException e) {
-                    // Expected
+                    // Expected when shutdownNow is called
                     Thread.currentThread().interrupt();
                 }
             });
         }
         
         // Wait for tasks to start
-        assertTrue(startedLatch.await(5, TimeUnit.SECONDS));
+        awaitLatch(startedLatch, SHORT_TIMEOUT_SECONDS);
         
-        // Shutdown the thread pool immediately
-        threadPool.shutdownNow();
+        // Then: shutdownNow should interrupt tasks
+        pool.shutdownNow();
         
-        // Verify that the thread pool is shutting down
-        assertTrue(threadPool.getExecutor().isShutdown());
+        // Verify that the executor is shutting down
+        assertTrue(pool.getExecutor().isShutdown(),
+                "Executor should be shutting down");
         
         // Unblock any tasks that weren't interrupted
         blockLatch.countDown();
         
         // Wait for termination
-        assertTrue(threadPool.awaitTermination(5, TimeUnit.SECONDS));
+        assertTrue(pool.awaitTermination(SHORT_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                "Thread pool should terminate");
     }
     
     @Test
-    public void testWorkStealing() throws Exception {
-        // Create a work-stealing thread pool
+    @DisplayName("Should use work-stealing for efficient task distribution")
+    void testWorkStealing() throws Exception {
+        // Given: a work-stealing thread pool
         ThreadPool.ThreadPoolConfig config = new ThreadPool.ThreadPoolConfig()
                 .setUseWorkStealing(true)
                 .setCorePoolSize(Runtime.getRuntime().availableProcessors());
         
-        ThreadPool threadPool = new ThreadPool(config);
-        
-        int numTasks = 100;
+        ThreadPool pool = createCustomThreadPool(config);
+        int numTasks = TASK_COUNT_MEDIUM;
         CountDownLatch latch = new CountDownLatch(numTasks);
         AtomicInteger counter = new AtomicInteger(0);
         
-        // Submit tasks with varying execution times to test work stealing
+        // When: tasks with varying execution times are submitted
         for (int i = 0; i < numTasks; i++) {
             final int taskId = i;
-            threadPool.execute(() -> {
+            pool.execute(() -> {
                 try {
-                    // Simulate varying workloads
+                    // Simulate varying workloads to test work stealing
                     if (taskId % 10 == 0) {
                         Thread.sleep(50); // Longer task
                     } else {
@@ -210,14 +280,12 @@ public class ThreadPoolTest {
             });
         }
         
-        // Wait for all tasks to complete
-        assertTrue(latch.await(10, TimeUnit.SECONDS));
+        // Then: all tasks should complete efficiently
+        awaitLatch(latch, MEDIUM_TIMEOUT_SECONDS);
         assertEquals(numTasks, counter.get());
         
         // Verify metrics
-        assertEquals(numTasks, threadPool.getTasksSubmitted());
-        assertEquals(numTasks, threadPool.getTasksCompleted());
-        
-        threadPool.shutdown();
+        assertEquals(numTasks, pool.getTasksSubmitted());
+        assertEquals(numTasks, pool.getTasksCompleted());
     }
 } 

@@ -47,6 +47,32 @@ public class Blyfast {
     private static final int DEFAULT_IDLE_TIMEOUT_MS = 60 * 1000; // 60 seconds
     private static final int DEFAULT_MAX_PARAMETERS = 2000;
     private static final int POOL_MONITOR_THREAD_JOIN_TIMEOUT_MS = 2000; // 2 seconds
+    
+    // Undertow server configuration constants
+    private static final int MIN_IO_THREADS = 4;
+    private static final int IO_THREADS_MULTIPLIER = 4;
+    private static final int BUFFER_SIZE_BYTES = 64 * 1024; // 64KB
+    private static final int CONNECTION_BACKLOG = 50000;
+    private static final long MAX_ENTITY_SIZE_BYTES = 4 * 1024 * 1024L; // 4MB
+    private static final int MAX_CONCURRENT_REQUESTS_PER_CONNECTION = 200;
+    private static final int MAX_CACHED_HEADER_SIZE = 1024;
+    private static final int MAX_HEADERS = 200;
+    private static final int MAX_COOKIES = 200;
+    private static final int WRITE_TIMEOUT_MS = 30000; // 30 seconds
+    private static final int ENTITY_WORKERS_MULTIPLIER = 8;
+    
+    // HTTP status codes
+    private static final int HTTP_OK = 200;
+    private static final int HTTP_NOT_FOUND = 404;
+    private static final int HTTP_INTERNAL_SERVER_ERROR = 500;
+    private static final int HTTP_SERVICE_UNAVAILABLE = 503;
+    
+    // Pool monitoring constants
+    private static final int POOL_MONITOR_CHECK_INTERVAL_MS = 30000; // 30 seconds
+    private static final double POOL_MISS_THRESHOLD = 0.1; // 10% misses trigger resize
+    private static final double POOL_SIZE_INCREASE_FACTOR = 1.5;
+    private static final double POOL_SIZE_DECREASE_FACTOR = 0.8;
+    private static final long POOL_RESIZE_COOLDOWN_MS = 600000; // 10 minutes
     private final ArrayBlockingQueue<Request> requestPool;
     private final ArrayBlockingQueue<Response> responsePool;
     private final ArrayBlockingQueue<Context> contextPool;
@@ -77,6 +103,9 @@ public class Blyfast {
     private int circuitBreakerThreshold = 50; // Number of errors before tripping
     private long circuitBreakerResetTimeoutMs = 30000; // 30 seconds
     private int circuitBreakerSuccessThreshold = 5; // Number of consecutive successes to close circuit
+    
+    // Circuit breaker state constants
+    private static final long HALF_OPEN_STATE_DETECTION_MULTIPLIER = 2;
     
     // Circuit breaker state - use volatile for visibility and atomic operations for state changes
     private final AtomicInteger errorCount = new AtomicInteger(0);
@@ -496,30 +525,49 @@ public class Blyfast {
             return true; // Circuit breaker disabled, allow all requests
         }
         
-        // Use atomic get for thread-safe read
         boolean isOpen = circuitOpen.get();
         
-        // If circuit is open (tripped)
-        if (isOpen) {
-            // Check if reset timeout has elapsed (volatile read ensures visibility)
-            long openTime = circuitOpenTime;
-            long now = System.currentTimeMillis();
-            
-            if (openTime > 0 && (now - openTime) > circuitBreakerResetTimeoutMs) {
-                // Try to reset circuit (half-open state) using atomic compare-and-set
-                if (circuitOpen.compareAndSet(true, false)) {
-                    errorCount.set(0);
-                    successCount.set(0); // Reset success count when entering half-open
-                    // Use volatile write for visibility
-                    circuitOpenTime = System.currentTimeMillis();
-                    logger.info("Circuit reset after timeout period, entering half-open state");
-                }
-                return true; // Allow request to test if system has recovered
-            }
-            return false; // Circuit is open, reject request
+        if (!isOpen) {
+            return true; // Circuit is closed, allow request
         }
         
-        return true; // Circuit is closed, allow request
+        // Circuit is open - check if we can transition to half-open state
+        return canTransitionToHalfOpen();
+    }
+    
+    /**
+     * Checks if the circuit breaker can transition from open to half-open state.
+     * This happens when the reset timeout has elapsed.
+     * 
+     * @return true if transition to half-open is allowed
+     */
+    private boolean canTransitionToHalfOpen() {
+        long openTime = circuitOpenTime;
+        if (openTime <= 0) {
+            return false; // No valid open time recorded
+        }
+        
+        long elapsed = System.currentTimeMillis() - openTime;
+        if (elapsed <= circuitBreakerResetTimeoutMs) {
+            return false; // Timeout not yet elapsed
+        }
+        
+        // Try to transition to half-open state
+        if (circuitOpen.compareAndSet(true, false)) {
+            resetCircuitBreakerCounters();
+            circuitOpenTime = System.currentTimeMillis();
+            logger.info("Circuit reset after timeout period, entering half-open state");
+        }
+        
+        return true; // Allow request to test if system has recovered
+    }
+    
+    /**
+     * Resets circuit breaker counters when transitioning states.
+     */
+    private void resetCircuitBreakerCounters() {
+        errorCount.set(0);
+        successCount.set(0);
     }
     
     /**
@@ -532,9 +580,7 @@ public class Blyfast {
             return;
         }
         
-        // Use atomic get for thread-safe read
         boolean isOpen = circuitOpen.get();
-        
         if (isOpen) {
             // Circuit is open, but we're testing (shouldn't happen due to checkCircuitBreaker)
             // This is a safety check
@@ -544,27 +590,43 @@ public class Blyfast {
         // Reset error count on success
         errorCount.set(0);
         
-        // Check if we were in half-open state (circuit was recently opened)
-        // Use volatile read for visibility
-        long openTime = circuitOpenTime;
-        long now = System.currentTimeMillis();
-        
-        if (openTime > 0 && (now - openTime) < circuitBreakerResetTimeoutMs * 2) {
-            // We're in half-open state, track consecutive successes
-            int successes = successCount.incrementAndGet();
-            if (successes >= circuitBreakerSuccessThreshold) {
-                // Enough consecutive successes, fully close the circuit
-                // Use atomic operations and volatile write for thread safety
-                if (circuitOpen.compareAndSet(false, false)) { // No-op but ensures visibility
-                    circuitOpenTime = 0; // Reset to indicate circuit is fully closed (volatile write)
-                    successCount.set(0);
-                    logger.info("Circuit breaker closed after {} consecutive successes", successes);
-                }
-            }
+        // Check if we're in half-open state
+        if (isInHalfOpenState()) {
+            handleSuccessInHalfOpenState();
         } else {
             // Circuit is fully closed, reset success count
             successCount.set(0);
         }
+    }
+    
+    /**
+     * Handles success when circuit breaker is in half-open state.
+     */
+    private void handleSuccessInHalfOpenState() {
+        int successes = successCount.incrementAndGet();
+        if (successes >= circuitBreakerSuccessThreshold) {
+            // Enough consecutive successes, fully close the circuit
+            if (circuitOpen.compareAndSet(false, false)) { // No-op but ensures visibility
+                circuitOpenTime = 0; // Reset to indicate circuit is fully closed
+                successCount.set(0);
+                logger.info("Circuit breaker closed after {} consecutive successes", successes);
+            }
+        }
+    }
+    
+    /**
+     * Checks if the circuit breaker is in half-open state.
+     * 
+     * @return true if in half-open state
+     */
+    private boolean isInHalfOpenState() {
+        long openTime = circuitOpenTime;
+        if (openTime <= 0) {
+            return false;
+        }
+        
+        long elapsed = System.currentTimeMillis() - openTime;
+        return elapsed < circuitBreakerResetTimeoutMs * HALF_OPEN_STATE_DETECTION_MULTIPLIER;
     }
     
     /**
@@ -580,33 +642,36 @@ public class Blyfast {
         // Reset success count on failure
         successCount.set(0);
         
-        // Check if we're in half-open state (testing after timeout)
-        // Use volatile read and atomic get for thread-safe checks
-        long openTime = circuitOpenTime;
-        long now = System.currentTimeMillis();
         boolean isOpen = circuitOpen.get();
         
-        boolean wasHalfOpen = openTime > 0 && 
-                             (now - openTime) < circuitBreakerResetTimeoutMs * 2 &&
-                             !isOpen;
-        
-        if (wasHalfOpen) {
+        if (isInHalfOpenState() && !isOpen) {
             // Immediately reopen circuit if failure occurs in half-open state
-            // Use atomic compare-and-set and volatile write for thread safety
-            if (circuitOpen.compareAndSet(false, true)) {
-                circuitOpenTime = System.currentTimeMillis(); // Volatile write
-                logger.warn("Circuit breaker reopened after failure in half-open state");
-            }
+            reopenCircuit("Circuit breaker reopened after failure in half-open state");
         } else if (!isOpen) {
             // Circuit is closed, increment error count
-            int currentErrors = errorCount.incrementAndGet();
-            if (currentErrors >= circuitBreakerThreshold) {
-                // Trip the circuit using atomic compare-and-set
-                if (circuitOpen.compareAndSet(false, true)) {
-                    circuitOpenTime = System.currentTimeMillis(); // Volatile write
-                    logger.warn("Circuit breaker tripped after {} consecutive errors", currentErrors);
-                }
-            }
+            handleFailureInClosedState();
+        }
+    }
+    
+    /**
+     * Handles failure when circuit breaker is in closed state.
+     */
+    private void handleFailureInClosedState() {
+        int currentErrors = errorCount.incrementAndGet();
+        if (currentErrors >= circuitBreakerThreshold) {
+            reopenCircuit("Circuit breaker tripped after " + currentErrors + " consecutive errors");
+        }
+    }
+    
+    /**
+     * Reopens the circuit breaker.
+     * 
+     * @param logMessage the message to log when reopening
+     */
+    private void reopenCircuit(String logMessage) {
+        if (circuitOpen.compareAndSet(false, true)) {
+            circuitOpenTime = System.currentTimeMillis();
+            logger.warn(logMessage);
         }
     }
 
@@ -636,7 +701,7 @@ public class Blyfast {
         
         // Calculate optimal thread counts for IO and worker threads - extreme optimization
         int availableProcessors = Runtime.getRuntime().availableProcessors();
-        int ioThreads = Math.max(4, availableProcessors * 4);  // Quadrupled for extreme throughput
+        int ioThreads = Math.max(MIN_IO_THREADS, availableProcessors * IO_THREADS_MULTIPLIER);
         int workerThreads = threadPool.getConfig().getMaxPoolSize();
         
         // Build an extremely optimized Undertow server
@@ -648,40 +713,41 @@ public class Blyfast {
                 // Worker threads from thread pool configuration
                 .setWorkerThreads(workerThreads)
                 // Maximize buffer pool for highest possible throughput
-                .setBufferSize(64 * 1024)  // Doubled buffer size for extreme throughput
+                .setBufferSize(BUFFER_SIZE_BYTES)
                 .setDirectBuffers(true)    // Use direct buffers for best performance
                 // Enable HTTP/2 support
                 .setServerOption(UndertowOptions.ENABLE_HTTP2, true)
                 // Extreme socket optimizations
                 .setSocketOption(Options.TCP_NODELAY, true)
-                .setSocketOption(Options.BACKLOG, 50000)  // Dramatically increased connection backlog
+                .setSocketOption(Options.BACKLOG, CONNECTION_BACKLOG)
                 .setSocketOption(Options.REUSE_ADDRESSES, true)
                 .setSocketOption(Options.CORK, true)
                 .setSocketOption(Options.KEEP_ALIVE, true) // Keep TCP connections alive
                 // Connection pooling settings
-                .setServerOption(UndertowOptions.MAX_ENTITY_SIZE, 4 * 1024 * 1024L)  // 4MB max request size
+                .setServerOption(UndertowOptions.MAX_ENTITY_SIZE, MAX_ENTITY_SIZE_BYTES)
                 // Advanced connection handling optimizations
                 .setServerOption(UndertowOptions.ALWAYS_SET_KEEP_ALIVE, true)
                 .setServerOption(UndertowOptions.ALWAYS_SET_DATE, true)
                 .setServerOption(UndertowOptions.RECORD_REQUEST_START_TIME, false)
-                .setServerOption(UndertowOptions.MAX_CONCURRENT_REQUESTS_PER_CONNECTION, 200) // Doubled
+                .setServerOption(UndertowOptions.MAX_CONCURRENT_REQUESTS_PER_CONNECTION, MAX_CONCURRENT_REQUESTS_PER_CONNECTION)
                 .setServerOption(UndertowOptions.NO_REQUEST_TIMEOUT, DEFAULT_REQUEST_TIMEOUT_MS)
                 .setServerOption(UndertowOptions.IDLE_TIMEOUT, DEFAULT_IDLE_TIMEOUT_MS)
                 // Performance-focused settings
-                .setServerOption(UndertowOptions.MAX_CACHED_HEADER_SIZE, 1024)
-                .setServerOption(UndertowOptions.MAX_HEADERS, 200)
+                .setServerOption(UndertowOptions.MAX_CACHED_HEADER_SIZE, MAX_CACHED_HEADER_SIZE)
+                .setServerOption(UndertowOptions.MAX_HEADERS, MAX_HEADERS)
                 .setServerOption(UndertowOptions.MAX_PARAMETERS, DEFAULT_MAX_PARAMETERS)
-                .setServerOption(UndertowOptions.MAX_COOKIES, 200)
+                .setServerOption(UndertowOptions.MAX_COOKIES, MAX_COOKIES)
                 .build();
 
         // Set system properties for extreme performance
-        System.setProperty("org.xnio.nio.WRITE_TIMEOUT", "30000"); // 30 second write timeout
+        System.setProperty("org.xnio.nio.WRITE_TIMEOUT", String.valueOf(WRITE_TIMEOUT_MS));
         System.setProperty("io.undertow.disable-body-buffer-reuse", "false"); // Enable buffer reuse
-        System.setProperty("io.undertow.server.max-entity-workers", String.valueOf(availableProcessors * 8)); // More entity workers
+        System.setProperty("io.undertow.server.max-entity-workers", String.valueOf(availableProcessors * ENTITY_WORKERS_MULTIPLIER));
 
         server.start();
         logger.info(LogUtil.info(ConsoleColors.GREEN_BOLD + "BlyFast server started in EXTREME PERFORMANCE MODE" + ConsoleColors.RESET));
-        logger.info(LogUtil.info("IO threads: " + ioThreads + ", worker threads: " + workerThreads + ", buffer size: 64KB"));
+        logger.info(LogUtil.info(String.format("IO threads: %d, worker threads: %d, buffer size: %dKB", 
+                ioThreads, workerThreads, BUFFER_SIZE_BYTES / 1024)));
         
         if (callback != null) {
             callback.run();
@@ -842,7 +908,7 @@ public class Blyfast {
                 
                 // Common health checks - absolute fastest path
                 if ("/health".equals(path) || "/ping".equals(path) || "/status".equals(path)) {
-                    exchange.setStatusCode(200);
+                    exchange.setStatusCode(HTTP_OK);
                     exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "application/json");
                     exchange.getResponseSender().send("{\"status\":\"ok\"}");
                     return;
@@ -922,7 +988,8 @@ public class Blyfast {
 
             // Circuit breaker check
             if (!checkCircuitBreaker()) {
-                exchange.setStatusCode(503);
+                exchange.setStatusCode(HTTP_SERVICE_UNAVAILABLE);
+                exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "application/json");
                 exchange.getResponseSender().send("{\"error\": \"Service temporarily unavailable\", \"message\": \"Circuit breaker open\"}");
                 exchange.endExchange();
                 return;
@@ -1018,7 +1085,7 @@ public class Blyfast {
                 }
             } else {
                 // No route found - return 404
-                response.status(404).json("{\"error\": \"Not Found\"}");
+                response.status(HTTP_NOT_FOUND).json("{\"error\": \"Not Found\"}");
                 recycleObjects(context, request, response);
             }
         }
@@ -1029,9 +1096,16 @@ public class Blyfast {
         private void handleError(HttpServerExchange exchange, Exception e) {
             logger.error(LogUtil.error("Error processing request: " + e.getMessage()), e);
             try {
-                exchange.setStatusCode(500);
-                exchange.getResponseSender().send("{\"error\": \"Internal Server Error\"}");
-                exchange.endExchange();
+                // Check if response has already been started
+                if (!exchange.isResponseStarted()) {
+                    exchange.setStatusCode(HTTP_INTERNAL_SERVER_ERROR);
+                    exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "application/json");
+                    exchange.getResponseSender().send("{\"error\": \"Internal Server Error\"}");
+                    exchange.endExchange();
+                } else {
+                    // Response already started, just log the error
+                    logger.warn("Cannot send error response - response already started");
+                }
             } catch (Exception ex) {
                 logger.error(LogUtil.error("Error sending error response: " + ex.getMessage()), ex);
             }
@@ -1076,7 +1150,7 @@ public class Blyfast {
                             continueProcessing = middleware.handle(context);
                         } catch (Exception e) {
                             logger.error(LogUtil.error("Error in middleware: " + e.getMessage()), e);
-                            response.status(500).json("{\"error\": \"Internal Server Error\"}");
+                            response.status(HTTP_INTERNAL_SERVER_ERROR).json("{\"error\": \"Internal Server Error\"}");
                             recycleObjects(context, request, response);
                             return; // Exit early on error
                         }
@@ -1093,7 +1167,8 @@ public class Blyfast {
             } catch (Exception e) {
                 logger.error(LogUtil.error("Error processing request: " + e.getMessage()), e);
                 try {
-                    exchange.setStatusCode(500);
+                    exchange.setStatusCode(HTTP_INTERNAL_SERVER_ERROR);
+                    exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "application/json");
                     exchange.getResponseSender().send("{\"error\": \"Internal Server Error\"}");
                 } catch (Exception ex) {
                     logger.error(LogUtil.error("Error sending error response: " + ex.getMessage()), ex);
@@ -1139,7 +1214,7 @@ public class Blyfast {
                             continueProcessing = middleware.handle(context);
                         } catch (Exception e) {
                             logger.error(LogUtil.error("Error in route middleware: " + e.getMessage()), e);
-                            response.status(500).json("{\"error\": \"Internal Server Error\"}");
+                            response.status(HTTP_INTERNAL_SERVER_ERROR).json("{\"error\": \"Internal Server Error\"}");
                             recycleObjects(context, request, response);
                             return; // Exit early on error
                         }
@@ -1156,7 +1231,7 @@ public class Blyfast {
                 }
             } else {
                 // No route found - return 404
-                response.status(404).json("{\"error\": \"Not Found\"}");
+                response.status(HTTP_NOT_FOUND).json("{\"error\": \"Not Found\"}");
                 recycleObjects(context, request, response);
             }
         }
@@ -1179,7 +1254,7 @@ public class Blyfast {
                 
                 logger.error(LogUtil.error("Error in route handler: " + e.getMessage()), e);
                 if (!response.isSent()) {
-                    response.status(500).json("{\"error\": \"Internal Server Error\"}");
+                    response.status(HTTP_INTERNAL_SERVER_ERROR).json("{\"error\": \"Internal Server Error\"}");
                 }
             }
         }
@@ -1214,7 +1289,7 @@ public class Blyfast {
                         continueProcessing = middleware.handle(context);
                     } catch (Exception e) {
                         logger.error(LogUtil.error("Error in async middleware: " + e.getMessage()), e);
-                        response.status(500).json("{\"error\": \"Internal Server Error\"}");
+                        response.status(HTTP_INTERNAL_SERVER_ERROR).json("{\"error\": \"Internal Server Error\"}");
                         completionCallback.run();
                         return; // Exit early on error
                     }
@@ -1283,7 +1358,7 @@ public class Blyfast {
             try {
                 while (!Thread.currentThread().isInterrupted()) {
                     try {
-                        Thread.sleep(30000); // Check every 30 seconds
+                        Thread.sleep(POOL_MONITOR_CHECK_INTERVAL_MS);
                         
                         // Check if pools need to be resized
                         checkPoolResizing();
@@ -1326,8 +1401,8 @@ public class Blyfast {
         long totalMisses = requestPoolMisses.sum() + responsePoolMisses.sum() + contextPoolMisses.sum();
         
         // If we have a significant number of misses, increase the pool size
-        if (totalMisses > currentPoolSize * 0.1) { // More than 10% misses
-            int newSize = Math.min((int)(currentPoolSize * 1.5), MAX_POOL_SIZE);
+        if (totalMisses > currentPoolSize * POOL_MISS_THRESHOLD) {
+            int newSize = Math.min((int)(currentPoolSize * POOL_SIZE_INCREASE_FACTOR), MAX_POOL_SIZE);
             if (newSize > currentPoolSize) {
                 logger.info("Increasing object pool size from {} to {} due to {} pool misses", 
                         currentPoolSize, newSize, totalMisses);
@@ -1342,8 +1417,8 @@ public class Blyfast {
         }
         // If we haven't had pool misses for a while and it's been at least 10 minutes since 
         // the last resize, consider reducing pool size
-        else if (totalMisses == 0 && now - lastPoolResizeTime > 600000 && currentPoolSize > DEFAULT_POOL_SIZE) {
-            int newSize = Math.max((int)(currentPoolSize * 0.8), DEFAULT_POOL_SIZE);
+        else if (totalMisses == 0 && now - lastPoolResizeTime > POOL_RESIZE_COOLDOWN_MS && currentPoolSize > DEFAULT_POOL_SIZE) {
+            int newSize = Math.max((int)(currentPoolSize * POOL_SIZE_DECREASE_FACTOR), DEFAULT_POOL_SIZE);
             if (newSize < currentPoolSize) {
                 logger.info("Decreasing object pool size from {} to {} due to low utilization", 
                         currentPoolSize, newSize);

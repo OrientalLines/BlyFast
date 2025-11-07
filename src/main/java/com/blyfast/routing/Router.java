@@ -139,6 +139,7 @@ public class Router {
 
     /**
      * Resolves the path parameters for a request based on the matching route.
+     * Validates path parameters to prevent path traversal attacks.
      *
      * @param request the request
      * @param route   the matching route
@@ -155,11 +156,48 @@ public class Router {
                 // Groups are 1-indexed, with group 0 being the entire match
                 String value = matcher.group(i + 1);
                 if (value != null) {
+                    // Validate path parameter to prevent path traversal attacks
+                    String sanitizedValue = sanitizePathParameter(value);
+                    if (sanitizedValue == null) {
+                        // Invalid path parameter detected, log and skip
+                        continue;
+                    }
                     String paramName = paramNames.get(i);
-                    request.setPathParam(paramName, value);
+                    request.setPathParam(paramName, sanitizedValue);
                 }
             }
         }
+    }
+    
+    /**
+     * Sanitizes a path parameter value to prevent path traversal attacks.
+     * 
+     * @param value the path parameter value to sanitize
+     * @return the sanitized value, or null if the value is invalid
+     */
+    private String sanitizePathParameter(String value) {
+        if (value == null || value.isEmpty()) {
+            return value;
+        }
+        
+        // Check for path traversal patterns
+        if (value.contains("..") || value.contains("//") || value.contains("\\")) {
+            return null; // Reject potentially dangerous values
+        }
+        
+        // Check for absolute paths
+        if (value.startsWith("/") || value.startsWith("\\")) {
+            return null; // Reject absolute paths
+        }
+        
+        // Check for control characters and other dangerous characters
+        for (char c : value.toCharArray()) {
+            if (Character.isISOControl(c) || c == '\0') {
+                return null; // Reject control characters
+            }
+        }
+        
+        return value;
     }
 
     /**

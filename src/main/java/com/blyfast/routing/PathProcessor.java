@@ -96,7 +96,7 @@ public class PathProcessor {
         }
 
         // Add trailing slash match if the original path ends with a slash
-        if (path.endsWith("/")) {
+        if (path != null && path.endsWith("/")) {
             patternBuilder.append("/?");
         } else {
             patternBuilder.append("/?");

@@ -3,6 +3,7 @@ package com.blyfast.core;
 import com.blyfast.middleware.Middleware;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -18,319 +19,383 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Deque;
+import java.util.concurrent.ThreadLocalRandom;
 
 import static org.junit.jupiter.api.Assertions.*;
 
 /**
- * Tests for the BlyFast framework core functionality.
+ * Comprehensive tests for the BlyFast framework core functionality.
+ * 
+ * <p>These tests verify routing, middleware, HTTP methods, concurrency,
+ * and various request/response features.</p>
  */
+@DisplayName("BlyFast Core Framework Tests")
 public class BlyFastTest {
 
-    private static final int TEST_PORT = 8888;
+    // Test configuration constants
+    private static final int PORT_RANGE_START = 9000;
+    private static final int PORT_RANGE_END = 9999;
+    private static final int CONNECTION_TIMEOUT_SECONDS = 5;
+    private static final int REQUEST_TIMEOUT_SECONDS = 10;
+    private static final int CONCURRENT_REQUESTS = 50;
+    private static final int CPU_INTENSIVE_REQUESTS = 20;
+    private static final int THREAD_POOL_CORE_SIZE = 4;
+    private static final int THREAD_POOL_MAX_SIZE = 8;
+    private static final int THREAD_POOL_QUEUE_CAPACITY = 100;
+    
     private Blyfast app;
     private HttpClient httpClient;
+    private int testPort;
 
     @BeforeEach
-    public void setUp() {
+    void setUp() {
+        // Use a random port to avoid conflicts between tests
+        testPort = findAvailablePort();
+        
         // Create a new BlyFast application for each test
         ThreadPool.ThreadPoolConfig config = new ThreadPool.ThreadPoolConfig()
-                .setCorePoolSize(4)
-                .setMaxPoolSize(8)
-                .setQueueCapacity(100);
+                .setCorePoolSize(THREAD_POOL_CORE_SIZE)
+                .setMaxPoolSize(THREAD_POOL_MAX_SIZE)
+                .setQueueCapacity(THREAD_POOL_QUEUE_CAPACITY);
 
         app = new Blyfast(config);
 
         // Create an HTTP client for testing
         httpClient = HttpClient.newBuilder()
-                .connectTimeout(Duration.ofSeconds(5))
+                .connectTimeout(Duration.ofSeconds(CONNECTION_TIMEOUT_SECONDS))
                 .build();
     }
 
     @AfterEach
-    public void tearDown() {
+    void tearDown() {
         // Stop the server after each test
         if (app != null) {
             app.stop();
         }
     }
-
-    @Test
-    public void testBasicRouting() throws Exception {
-        // Define a simple route
-        app.get("/test", ctx -> ctx.json("{ \"message\": \"Hello, World!\" }"));
-
-        // Start the server
-        app.port(TEST_PORT).listen();
-
-        // Send a request to the server
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create("http://localhost:" + TEST_PORT + "/test"))
+    
+    /**
+     * Finds an available port for testing.
+     * Uses a random port to avoid conflicts between tests.
+     */
+    private int findAvailablePort() {
+        // Use a random port (in real scenario, would check if port is available)
+        return ThreadLocalRandom.current().nextInt(PORT_RANGE_START, PORT_RANGE_END);
+    }
+    
+    /**
+     * Helper method to start the server on the test port.
+     */
+    private void startServer() {
+        app.port(testPort).listen();
+        // Give server time to start
+        try {
+            Thread.sleep(100);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+    
+    /**
+     * Helper method to create a GET request.
+     */
+    private HttpRequest createGetRequest(String path) {
+        return HttpRequest.newBuilder()
+                .uri(URI.create("http://localhost:" + testPort + path))
                 .GET()
+                .timeout(Duration.ofSeconds(REQUEST_TIMEOUT_SECONDS))
                 .build();
-
-        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
-        // Verify the response
-        assertEquals(200, response.statusCode());
-        assertTrue(response.body().contains("Hello, World!"));
+    }
+    
+    /**
+     * Helper method to create a POST request.
+     */
+    private HttpRequest createPostRequest(String path) {
+        return createPostRequest(path, HttpRequest.BodyPublishers.noBody());
+    }
+    
+    /**
+     * Helper method to create a POST request with body.
+     */
+    private HttpRequest createPostRequest(String path, HttpRequest.BodyPublisher body) {
+        return HttpRequest.newBuilder()
+                .uri(URI.create("http://localhost:" + testPort + path))
+                .POST(body)
+                .timeout(Duration.ofSeconds(REQUEST_TIMEOUT_SECONDS))
+                .build();
+    }
+    
+    /**
+     * Helper method to create a PUT request.
+     */
+    private HttpRequest createPutRequest(String path) {
+        return HttpRequest.newBuilder()
+                .uri(URI.create("http://localhost:" + testPort + path))
+                .PUT(HttpRequest.BodyPublishers.noBody())
+                .timeout(Duration.ofSeconds(REQUEST_TIMEOUT_SECONDS))
+                .build();
+    }
+    
+    /**
+     * Helper method to create a DELETE request.
+     */
+    private HttpRequest createDeleteRequest(String path) {
+        return HttpRequest.newBuilder()
+                .uri(URI.create("http://localhost:" + testPort + path))
+                .DELETE()
+                .timeout(Duration.ofSeconds(REQUEST_TIMEOUT_SECONDS))
+                .build();
+    }
+    
+    /**
+     * Helper method to send a request and return the response.
+     */
+    private HttpResponse<String> sendRequest(HttpRequest request) throws IOException, InterruptedException {
+        return httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+    }
+    
+    /**
+     * Helper method to assert a successful response.
+     */
+    private void assertSuccessResponse(HttpResponse<String> response, int expectedStatus) {
+        assertEquals(expectedStatus, response.statusCode(), 
+                "Expected status " + expectedStatus + " but got " + response.statusCode());
+    }
+    
+    /**
+     * Helper method to assert response body contains text.
+     */
+    private void assertResponseContains(HttpResponse<String> response, String expectedText) {
+        assertTrue(response.body().contains(expectedText),
+                "Response body should contain: " + expectedText + "\nActual body: " + response.body());
+    }
+    
+    /**
+     * Helper method to create a GET request with query parameters.
+     */
+    private HttpRequest createGetRequestWithQuery(String path, String queryString) {
+        String fullPath = queryString != null && !queryString.isEmpty() 
+                ? path + "?" + queryString 
+                : path;
+        return createGetRequest(fullPath);
     }
 
     @Test
-    public void testPathParameters() throws Exception {
-        // Define a route with a path parameter
+    @DisplayName("Should handle basic GET routing")
+    void testBasicRouting() throws Exception {
+        // Given: a simple route is defined
+        app.get("/test", ctx -> ctx.json("{ \"message\": \"Hello, World!\" }"));
+        startServer();
+
+        // When: a GET request is sent
+        HttpRequest request = createGetRequest("/test");
+        HttpResponse<String> response = sendRequest(request);
+
+        // Then: the response should be successful and contain expected content
+        assertSuccessResponse(response, 200);
+        assertResponseContains(response, "Hello, World!");
+    }
+
+    @Test
+    @DisplayName("Should extract and use path parameters")
+    void testPathParameters() throws Exception {
+        // Given: a route with path parameter is defined
+        String userId = "123";
         app.get("/users/:id", ctx -> {
             String id = ctx.param("id");
             ctx.json("{ \"id\": \"" + id + "\", \"name\": \"User " + id + "\" }");
         });
+        startServer();
 
-        // Start the server
-        app.port(TEST_PORT).listen();
+        // When: a request is sent with a path parameter
+        HttpRequest request = createGetRequest("/users/" + userId);
+        HttpResponse<String> response = sendRequest(request);
 
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create("http://localhost:" + TEST_PORT + "/users/123"))
-                .GET()
-                .build();
-
-        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
-        // Log the response details
-        System.out.println("Path Parameters Response Status: " + response.statusCode());
-        System.out.println("Path Parameters Response Body: " + response.body());
-        
-        // Verify the response
-        assertEquals(200, response.statusCode());
-        assertTrue(response.body().contains("{ \\\"id\\\": \\\"123\\\", \\\"name\\\": \\\"User 123\\\" }"));
+        // Then: the response should contain the extracted parameter
+        assertSuccessResponse(response, 200);
+        assertResponseContains(response, "\"id\": \"123\"");
+        assertResponseContains(response, "\"name\": \"User 123\"");
     }
 
     @Test
-    public void testMiddleware() throws Exception {
-        // Create a middleware that adds a header
+    @DisplayName("Should execute middleware before route handlers")
+    void testMiddleware() throws Exception {
+        // Given: middleware that adds a header and a route
         AtomicBoolean middlewareExecuted = new AtomicBoolean(false);
+        String testHeaderName = "X-Test";
+        String testHeaderValue = "middleware-executed";
 
         Middleware testMiddleware = ctx -> {
             middlewareExecuted.set(true);
-            ctx.header("X-Test", "middleware-executed");
+            ctx.header(testHeaderName, testHeaderValue);
             return true;
         };
 
-        // Add the middleware and define a route
         app.use(testMiddleware);
         app.get("/middleware-test", ctx -> ctx.json("{ \"message\": \"Middleware Test\" }"));
+        startServer();
 
-        // Start the server
-        app.port(TEST_PORT).listen();
+        // When: a request is sent
+        HttpRequest request = createGetRequest("/middleware-test");
+        HttpResponse<String> response = sendRequest(request);
 
-        // Send a request to the server
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create("http://localhost:" + TEST_PORT + "/middleware-test"))
-                .GET()
-                .build();
-
-        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
-        // Verify the response
-        assertEquals(200, response.statusCode());
-        assertTrue(response.body().contains("Middleware Test"));
-        assertEquals("middleware-executed", response.headers().firstValue("X-Test").orElse(null));
-        assertTrue(middlewareExecuted.get());
+        // Then: middleware should execute and add header, route should handle request
+        assertSuccessResponse(response, 200);
+        assertResponseContains(response, "Middleware Test");
+        assertEquals(testHeaderValue, response.headers().firstValue(testHeaderName).orElse(null),
+                "Middleware should add custom header");
+        assertTrue(middlewareExecuted.get(), "Middleware should have been executed");
     }
 
     @Test
-    public void testMiddlewareChainInterruption() throws Exception {
-        // Create a middleware that interrupts the chain
+    @DisplayName("Should interrupt middleware chain when middleware returns false")
+    void testMiddlewareChainInterruption() throws Exception {
+        // Given: blocking middleware that interrupts chain and a route handler
+        int forbiddenStatus = 403;
         Middleware blockingMiddleware = ctx -> {
-            ctx.status(403).json("{ \"error\": \"Access Denied\" }");
+            ctx.status(forbiddenStatus).json("{ \"error\": \"Access Denied\" }");
             return false; // Interrupt the chain
         };
 
-        // Add the middleware and define a route
         app.use(blockingMiddleware);
         app.get("/protected", ctx -> ctx.json("{ \"message\": \"This should not be reached\" }"));
+        startServer();
 
-        // Start the server
-        app.port(TEST_PORT).listen();
+        // When: a request is sent to protected route
+        HttpRequest request = createGetRequest("/protected");
+        HttpResponse<String> response = sendRequest(request);
 
-        // Send a request to the server
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create("http://localhost:" + TEST_PORT + "/protected"))
-                .GET()
-                .build();
-
-        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
-        // Verify the response
-        assertEquals(403, response.statusCode());
-        assertTrue(response.body().contains("Access Denied"));
-        assertFalse(response.body().contains("This should not be reached"));
+        // Then: middleware should block and route handler should not execute
+        assertSuccessResponse(response, forbiddenStatus);
+        assertResponseContains(response, "Access Denied");
+        assertFalse(response.body().contains("This should not be reached"),
+                "Route handler should not execute when middleware interrupts");
     }
 
     @Test
-    public void testNotFound() throws Exception {
-        // Define a route
+    @DisplayName("Should return 404 for non-existent routes")
+    void testNotFound() throws Exception {
+        // Given: a server with some routes
         app.get("/exists", ctx -> ctx.json("{ \"message\": \"This route exists\" }"));
+        startServer();
 
-        // Start the server
-        app.port(TEST_PORT).listen();
+        // When: a request is sent to a non-existent route
+        HttpRequest request = createGetRequest("/does-not-exist");
+        HttpResponse<String> response = sendRequest(request);
 
-        // Send a request to a non-existent route
-        HttpRequest request = HttpRequest.newBuilder()
-                .uri(URI.create("http://localhost:" + TEST_PORT + "/does-not-exist"))
-                .GET()
-                .build();
-
-        HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
-        // Verify the response
-        assertEquals(404, response.statusCode());
-        assertTrue(response.body().contains("Not Found"));
+        // Then: should return 404 Not Found
+        assertSuccessResponse(response, 404);
+        assertResponseContains(response, "Not Found");
     }
 
     @Test
-    public void testDifferentHttpMethods() throws Exception {
-        // Define routes for different HTTP methods
+    @DisplayName("Should handle different HTTP methods correctly")
+    void testDifferentHttpMethods() throws Exception {
+        // Given: routes defined for different HTTP methods
         app.get("/methods", ctx -> ctx.json("{ \"method\": \"GET\" }"));
         app.post("/methods", ctx -> ctx.json("{ \"method\": \"POST\" }"));
         app.put("/methods", ctx -> ctx.json("{ \"method\": \"PUT\" }"));
         app.delete("/methods", ctx -> ctx.json("{ \"method\": \"DELETE\" }"));
+        startServer();
 
-        // Start the server
-        app.port(TEST_PORT).listen();
+        // When/Then: each HTTP method should route to correct handler
+        HttpRequest getRequest = createGetRequest("/methods");
+        HttpResponse<String> getResponse = sendRequest(getRequest);
+        assertSuccessResponse(getResponse, 200);
+        assertResponseContains(getResponse, "\"method\": \"GET\"");
 
-        // Test GET
-        HttpRequest getRequest = HttpRequest.newBuilder()
-                .uri(URI.create("http://localhost:" + TEST_PORT + "/methods"))
-                .GET()
-                .build();
+        HttpRequest postRequest = createPostRequest("/methods");
+        HttpResponse<String> postResponse = sendRequest(postRequest);
+        assertSuccessResponse(postResponse, 200);
+        assertResponseContains(postResponse, "\"method\": \"POST\"");
 
-        HttpResponse<String> getResponse = httpClient.send(getRequest, HttpResponse.BodyHandlers.ofString());
-        System.out.println("GET Response Status: " + getResponse.statusCode());
-        System.out.println("GET Response Body: " + getResponse.body());
-        assertEquals(200, getResponse.statusCode());
-        assertTrue(getResponse.body().contains("{ \\\"method\\\": \\\"GET\\\" }"));
+        HttpRequest putRequest = createPutRequest("/methods");
+        HttpResponse<String> putResponse = sendRequest(putRequest);
+        assertSuccessResponse(putResponse, 200);
+        assertResponseContains(putResponse, "\"method\": \"PUT\"");
 
-        // Test POST
-        HttpRequest postRequest = HttpRequest.newBuilder()
-                .uri(URI.create("http://localhost:" + TEST_PORT + "/methods"))
-                .POST(HttpRequest.BodyPublishers.noBody())
-                .build();
-
-        HttpResponse<String> postResponse = httpClient.send(postRequest, HttpResponse.BodyHandlers.ofString());
-        System.out.println("POST Response Status: " + postResponse.statusCode());
-        System.out.println("POST Response Body: " + postResponse.body());
-        assertEquals(200, postResponse.statusCode());
-        assertTrue(postResponse.body().contains("{ \\\"method\\\": \\\"POST\\\" }"));
-
-        // Test PUT
-        HttpRequest putRequest = HttpRequest.newBuilder()
-                .uri(URI.create("http://localhost:" + TEST_PORT + "/methods"))
-                .PUT(HttpRequest.BodyPublishers.noBody())
-                .build();
-
-        HttpResponse<String> putResponse = httpClient.send(putRequest, HttpResponse.BodyHandlers.ofString());
-        System.out.println("PUT Response Status: " + putResponse.statusCode());
-        System.out.println("PUT Response Body: " + putResponse.body());
-        assertEquals(200, putResponse.statusCode());
-        assertTrue(putResponse.body().contains("{ \\\"method\\\": \\\"PUT\\\" }"));
-
-        // Test DELETE
-        HttpRequest deleteRequest = HttpRequest.newBuilder()
-                .uri(URI.create("http://localhost:" + TEST_PORT + "/methods"))
-                .DELETE()
-                .build();
-
-        HttpResponse<String> deleteResponse = httpClient.send(deleteRequest, HttpResponse.BodyHandlers.ofString());
-        System.out.println("DELETE Response Status: " + deleteResponse.statusCode());
-        System.out.println("DELETE Response Body: " + deleteResponse.body());
-        assertEquals(200, deleteResponse.statusCode());
-        assertTrue(deleteResponse.body().contains("{ \\\"method\\\": \\\"DELETE\\\" }"));
+        HttpRequest deleteRequest = createDeleteRequest("/methods");
+        HttpResponse<String> deleteResponse = sendRequest(deleteRequest);
+        assertSuccessResponse(deleteResponse, 200);
+        assertResponseContains(deleteResponse, "\"method\": \"DELETE\"");
     }
 
     @Test
-    public void testConcurrentRequests() throws Exception {
-        // Define a route that simulates some processing time
+    @DisplayName("Should handle concurrent requests correctly")
+    void testConcurrentRequests() throws Exception {
+        // Given: a route that simulates processing time
+        int processingDelayMs = 50;
         app.get("/concurrent", ctx -> {
             try {
-                // Simulate some processing time
-                Thread.sleep(50);
+                Thread.sleep(processingDelayMs);
                 ctx.json("{ \"message\": \"Processed\" }");
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 ctx.status(500).json("{ \"error\": \"Processing interrupted\" }");
             }
         });
+        startServer();
 
-        // Start the server
-        app.port(TEST_PORT).listen();
-
-        // Send multiple concurrent requests
-        int numRequests = 50;
-        CountDownLatch latch = new CountDownLatch(numRequests);
+        // When: multiple concurrent requests are sent
+        CountDownLatch latch = new CountDownLatch(CONCURRENT_REQUESTS);
         AtomicInteger successCount = new AtomicInteger(0);
+        AtomicInteger failureCount = new AtomicInteger(0);
 
-        for (int i = 0; i < numRequests; i++) {
+        for (int i = 0; i < CONCURRENT_REQUESTS; i++) {
             new Thread(() -> {
                 try {
-                    HttpRequest request = HttpRequest.newBuilder()
-                            .uri(URI.create("http://localhost:" + TEST_PORT + "/concurrent"))
-                            .GET()
-                            .build();
-
-                    HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+                    HttpRequest request = createGetRequest("/concurrent");
+                    HttpResponse<String> response = sendRequest(request);
 
                     if (response.statusCode() == 200 && response.body().contains("Processed")) {
                         successCount.incrementAndGet();
+                    } else {
+                        failureCount.incrementAndGet();
                     }
-                } catch (IOException | InterruptedException e) {
-                    // Count as failure
+                } catch (Exception e) {
+                    failureCount.incrementAndGet();
                 } finally {
                     latch.countDown();
                 }
             }).start();
         }
 
-        // Wait for all requests to complete
-        assertTrue(latch.await(10, TimeUnit.SECONDS));
-
-        // Verify that all requests were successful
-        assertEquals(numRequests, successCount.get());
+        // Then: all requests should complete successfully
+        assertTrue(latch.await(REQUEST_TIMEOUT_SECONDS, TimeUnit.SECONDS),
+                "All requests should complete within timeout");
+        assertEquals(CONCURRENT_REQUESTS, successCount.get(),
+                "All " + CONCURRENT_REQUESTS + " requests should succeed");
+        assertEquals(0, failureCount.get(), "No requests should fail");
     }
 
     @Test
-    public void testThreadPoolPerformance() throws Exception {
-        // Define a CPU-intensive route
+    @DisplayName("Should handle CPU-intensive requests efficiently using thread pool")
+    void testThreadPoolPerformance() throws Exception {
+        // Given: a CPU-intensive route
+        int iterations = 1_000_000;
         app.get("/cpu-intensive", ctx -> {
-            // Perform a CPU-intensive operation
             long result = 0;
-            for (int i = 0; i < 1000000; i++) {
+            for (int i = 0; i < iterations; i++) {
                 result += i;
             }
             ctx.json("{ \"result\": " + result + " }");
         });
+        startServer();
 
-        // Start the server
-        app.port(TEST_PORT).listen();
-
-        // Send multiple concurrent requests
-        int numRequests = 20;
-        CountDownLatch latch = new CountDownLatch(numRequests);
+        // When: multiple concurrent CPU-intensive requests are sent
+        CountDownLatch latch = new CountDownLatch(CPU_INTENSIVE_REQUESTS);
         AtomicInteger successCount = new AtomicInteger(0);
 
-        long startTime = System.nanoTime();
-
-        for (int i = 0; i < numRequests; i++) {
+        for (int i = 0; i < CPU_INTENSIVE_REQUESTS; i++) {
             new Thread(() -> {
                 try {
-                    HttpRequest request = HttpRequest.newBuilder()
-                            .uri(URI.create("http://localhost:" + TEST_PORT + "/cpu-intensive"))
-                            .GET()
-                            .build();
-
-                    HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+                    HttpRequest request = createGetRequest("/cpu-intensive");
+                    HttpResponse<String> response = sendRequest(request);
 
                     if (response.statusCode() == 200 && response.body().contains("result")) {
                         successCount.incrementAndGet();
                     }
-                } catch (IOException | InterruptedException e) {
+                } catch (Exception e) {
                     // Count as failure
                 } finally {
                     latch.countDown();
@@ -338,113 +403,97 @@ public class BlyFastTest {
             }).start();
         }
 
-        // Wait for all requests to complete
-        assertTrue(latch.await(30, TimeUnit.SECONDS));
-
-        long endTime = System.nanoTime();
-        double elapsedSeconds = (endTime - startTime) / 1_000_000_000.0;
-
-        // Verify that all requests were successful
-        assertEquals(numRequests, successCount.get());
-
-        // Print performance metrics
-        System.out.println("Thread pool performance test:");
-        System.out.println("  Completed " + numRequests + " CPU-intensive requests in " + elapsedSeconds + " seconds");
-        System.out.println("  Throughput: " + (numRequests / elapsedSeconds) + " requests/second");
-        System.out.println("  Thread pool stats:");
-        System.out.println("    Tasks submitted: " + app.getThreadPool().getTasksSubmitted());
-        System.out.println("    Tasks completed: " + app.getThreadPool().getTasksCompleted());
-        System.out.println("    Average execution time: " +
-                (app.getThreadPool().getAverageExecutionTime() / 1_000_000.0) + " ms");
+        // Then: all requests should complete successfully
+        assertTrue(latch.await(30, TimeUnit.SECONDS),
+                "All CPU-intensive requests should complete within timeout");
+        assertEquals(CPU_INTENSIVE_REQUESTS, successCount.get(),
+                "All requests should succeed");
+        
+        // Note: Thread pool metrics verification removed as framework may handle
+        // requests through different mechanisms (IO threads, direct handling, etc.)
     }
 
     @Test
-    public void testQueryParameters() throws Exception {
-        // Define a route that returns query parameters
+    @DisplayName("Should extract basic query parameters")
+    void testBasicQueryParameters() throws Exception {
+        // Given: a route that extracts query parameters
         app.get("/query-test", ctx -> {
             Map<String, Object> result = new HashMap<>();
-            
-            // Basic query parameter
             result.put("name", ctx.query("name"));
-            
-            // Type conversion
+            result.put("missing", ctx.query("missing"));
+            ctx.json(result);
+        });
+        startServer();
+
+        // When: a request is sent with query parameters
+        HttpRequest request = createGetRequestWithQuery("/query-test", "name=test");
+        HttpResponse<String> response = sendRequest(request);
+
+        // Then: query parameters should be extracted correctly
+        assertSuccessResponse(response, 200);
+        assertResponseContains(response, "\"name\": \"test\"");
+        assertResponseContains(response, "\"missing\": null");
+    }
+
+    @Test
+    @DisplayName("Should convert query parameters to different types")
+    void testQueryParameterTypeConversion() throws Exception {
+        // Given: a route that converts query parameters to different types
+        app.get("/query-types", ctx -> {
+            Map<String, Object> result = new HashMap<>();
             result.put("page", ctx.queryAsInt("page"));
             result.put("id", ctx.queryAsLong("id"));
             result.put("price", ctx.queryAsDouble("price"));
             result.put("active", ctx.queryAsBoolean("active"));
-            
-            // Missing parameters with null results
-            result.put("missing", ctx.query("missing"));
             result.put("missingInt", ctx.queryAsInt("missingInt"));
-            
-            // Invalid type conversions
             result.put("invalidInt", ctx.queryAsInt("invalidInt"));
-            
-            // Get all query parameters
-            result.put("allParams", ctx.queryParams());
-            
-            // Multi-value parameter - return the first and count
+            ctx.json(result);
+        });
+        startServer();
+
+        // When: a request is sent with various typed query parameters
+        String queryString = "page=5&id=123456789&price=19.99&active=true&invalidInt=not-a-number";
+        HttpRequest request = createGetRequestWithQuery("/query-types", queryString);
+        HttpResponse<String> response = sendRequest(request);
+
+        // Then: parameters should be converted to correct types
+        assertSuccessResponse(response, 200);
+        assertResponseContains(response, "\"page\": 5");
+        assertResponseContains(response, "\"id\": 123456789");
+        assertResponseContains(response, "\"price\": 19.99");
+        assertResponseContains(response, "\"active\": true");
+        assertResponseContains(response, "\"missingInt\": null");
+        assertResponseContains(response, "\"invalidInt\": null");
+    }
+
+    @Test
+    @DisplayName("Should handle multi-value query parameters")
+    void testMultiValueQueryParameters() throws Exception {
+        // Given: a route that handles multi-value query parameters
+        app.get("/query-multi", ctx -> {
+            Map<String, Object> result = new HashMap<>();
             Deque<String> tags = ctx.queryValues("tag");
             result.put("firstTag", tags != null ? tags.getFirst() : null);
             result.put("tagCount", tags != null ? tags.size() : 0);
-            
             ctx.json(result);
         });
+        startServer();
 
-        // Start the server
-        app.port(TEST_PORT).listen();
+        // When: a request is sent with multiple values for the same parameter
+        HttpRequest request = createGetRequestWithQuery("/query-multi", "tag=java&tag=framework&tag=http");
+        HttpResponse<String> response = sendRequest(request);
 
-        // Test basic query parameter and type conversions
-        HttpRequest request1 = HttpRequest.newBuilder()
-                .uri(URI.create("http://localhost:" + TEST_PORT + 
-                     "/query-test?name=test&page=5&id=123456789&price=19.99&active=true&invalidInt=not-a-number"))
-                .GET()
-                .build();
+        // Then: all values should be accessible
+        assertSuccessResponse(response, 200);
+        assertResponseContains(response, "\"firstTag\": \"java\"");
+        assertResponseContains(response, "\"tagCount\": 3");
+    }
 
-        HttpResponse<String> response1 = httpClient.send(request1, HttpResponse.BodyHandlers.ofString());
-        
-        // Verify the response
-        assertEquals(200, response1.statusCode());
-        String body1 = response1.body();
-        assertTrue(body1.contains("\"name\": \"test\""));
-        assertTrue(body1.contains("\"page\": 5"));
-        assertTrue(body1.contains("\"id\": 123456789"));
-        assertTrue(body1.contains("\"price\": 19.99"));
-        assertTrue(body1.contains("\"active\": true"));
-        assertTrue(body1.contains("\"missing\": null"));
-        assertTrue(body1.contains("\"missingInt\": null"));
-        assertTrue(body1.contains("\"invalidInt\": null"));
-
-        // Test multi-value parameters
-        HttpRequest request2 = HttpRequest.newBuilder()
-                .uri(URI.create("http://localhost:" + TEST_PORT + 
-                     "/query-test?tag=java&tag=framework&tag=http"))
-                .GET()
-                .build();
-
-        HttpResponse<String> response2 = httpClient.send(request2, HttpResponse.BodyHandlers.ofString());
-        
-        // Verify the response
-        assertEquals(200, response2.statusCode());
-        String body2 = response2.body();
-        assertTrue(body2.contains("\"firstTag\": \"java\""));
-        assertTrue(body2.contains("\"tagCount\": 3"));
-
-        // Test boolean conversions with various values
-        HttpRequest request3 = HttpRequest.newBuilder()
-                .uri(URI.create("http://localhost:" + TEST_PORT + 
-                     "/query-test?active1=yes&active2=1&active3=on&inactive1=no&inactive2=0&inactive3=off"))
-                .GET()
-                .build();
-
-        HttpResponse<String> response3 = httpClient.send(request3, HttpResponse.BodyHandlers.ofString());
-
-        // The boolean values will be processed by the queryParams method which will return a map
-        assertEquals(200, response3.statusCode());
-        // Response body is not used in this test
-        
-        // Test individual boolean value
-        app.get("/boolean-test", ctx -> {
+    @Test
+    @DisplayName("Should convert boolean query parameters with various formats")
+    void testBooleanQueryParameterConversion() throws Exception {
+        // Given: a route that converts boolean query parameters
+        app.get("/query-boolean", ctx -> {
             Map<String, Object> result = new HashMap<>();
             result.put("active1", ctx.queryAsBoolean("active1"));
             result.put("active2", ctx.queryAsBoolean("active2"));
@@ -455,23 +504,41 @@ public class BlyFastTest {
             result.put("invalid", ctx.queryAsBoolean("invalid"));
             ctx.json(result);
         });
-        
-        HttpRequest booleanRequest = HttpRequest.newBuilder()
-                .uri(URI.create("http://localhost:" + TEST_PORT + 
-                     "/boolean-test?active1=yes&active2=1&active3=on&inactive1=no&inactive2=0&inactive3=off&invalid=maybe"))
-                .GET()
-                .build();
+        startServer();
 
-        HttpResponse<String> booleanResponse = httpClient.send(booleanRequest, HttpResponse.BodyHandlers.ofString());
-        
-        assertEquals(200, booleanResponse.statusCode());
-        String booleanBody = booleanResponse.body();
-        assertTrue(booleanBody.contains("\"active1\": true"));
-        assertTrue(booleanBody.contains("\"active2\": true"));
-        assertTrue(booleanBody.contains("\"active3\": true"));
-        assertTrue(booleanBody.contains("\"inactive1\": false"));
-        assertTrue(booleanBody.contains("\"inactive2\": false"));
-        assertTrue(booleanBody.contains("\"inactive3\": false"));
-        assertTrue(booleanBody.contains("\"invalid\": null"));
+        // When: a request is sent with various boolean formats
+        String queryString = "active1=yes&active2=1&active3=on&inactive1=no&inactive2=0&inactive3=off&invalid=maybe";
+        HttpRequest request = createGetRequestWithQuery("/query-boolean", queryString);
+        HttpResponse<String> response = sendRequest(request);
+
+        // Then: boolean values should be converted correctly
+        assertSuccessResponse(response, 200);
+        assertResponseContains(response, "\"active1\": true");
+        assertResponseContains(response, "\"active2\": true");
+        assertResponseContains(response, "\"active3\": true");
+        assertResponseContains(response, "\"inactive1\": false");
+        assertResponseContains(response, "\"inactive2\": false");
+        assertResponseContains(response, "\"inactive3\": false");
+        assertResponseContains(response, "\"invalid\": null");
+    }
+
+    @Test
+    @DisplayName("Should retrieve all query parameters")
+    void testGetAllQueryParameters() throws Exception {
+        // Given: a route that retrieves all query parameters
+        app.get("/query-all", ctx -> {
+            Map<String, Object> result = new HashMap<>();
+            result.put("allParams", ctx.queryParams());
+            ctx.json(result);
+        });
+        startServer();
+
+        // When: a request is sent with multiple query parameters
+        HttpRequest request = createGetRequestWithQuery("/query-all", "name=test&page=5&active=true");
+        HttpResponse<String> response = sendRequest(request);
+
+        // Then: all parameters should be retrievable
+        assertSuccessResponse(response, 200);
+        assertResponseContains(response, "allParams");
     }
 }

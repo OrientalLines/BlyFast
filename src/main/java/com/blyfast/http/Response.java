@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import com.blyfast.nativeopt.NativeOptimizer;
@@ -237,7 +238,8 @@ public class Response {
         exchange.getResponseHeaders().put(Headers.CONTENT_TYPE, "application/json");
         
         // Normalize only if needed (adds overhead)
-        if (json.contains(": ")) {
+        // Check if JSON needs normalization before applying it
+        if (json.length() >= MIN_JSON_LENGTH_FOR_NORMALIZATION && json.contains(":") && !json.contains(JSON_COLON_SPACE)) {
             if (nativeOptimizationsAvailable) {
                 try {
                     // Use native JSON escaping for better performance
@@ -272,9 +274,16 @@ public class Response {
                 // Opportunistically cache common small responses
                 if (buffer.remaining() < SMALL_RESPONSE_THRESHOLD && !commonResponseCache.containsKey(json)) {
                     final String jsonToCache = json; // Create final copy for lambda
-                    cacheExecutor.submit(() -> {
-                        cacheCommonResponse(jsonToCache, true);
-                    });
+                    if (cacheExecutor != null && !cacheExecutor.isShutdown()) {
+                        try {
+                            cacheExecutor.submit(() -> {
+                                cacheCommonResponse(jsonToCache, true);
+                            });
+                        } catch (RejectedExecutionException e) {
+                            // Executor is shutting down, skip caching
+                            logger.debug("Cache executor rejected task, skipping cache");
+                        }
+                    }
                 }
                 
                 sent = true;
@@ -375,23 +384,48 @@ public class Response {
      * Caches a response string in the background to avoid blocking the response path.
      */
     private void cacheResponse(String json) {
-        cacheExecutor.submit(() -> {
-            cacheCommonResponse(json, true);
-        });
+        // Check if executor is still available before submitting
+        if (cacheExecutor != null && !cacheExecutor.isShutdown()) {
+            try {
+                cacheExecutor.submit(() -> {
+                    cacheCommonResponse(json, true);
+                });
+            } catch (RejectedExecutionException e) {
+                // Executor is shutting down, skip caching
+                logger.debug("Cache executor rejected task, skipping cache");
+            }
+        }
     }
+    
+    // JSON normalization constants
+    private static final String JSON_COLON_SPACE = ": ";
+    private static final String JSON_COLON_NO_SPACE_PATTERN = ":(\\S)";
+    private static final String JSON_COLON_WITH_SPACE_REPLACEMENT = ": $1";
+    private static final int MIN_JSON_LENGTH_FOR_NORMALIZATION = 2;
     
     /**
      * Normalizes a JSON string to ensure consistent formatting.
      * This is especially important for tests that check string contents.
+     * Only normalizes if the JSON contains patterns that need normalization.
      *
      * @param json the JSON string to normalize
      * @return the normalized JSON string
      */
     private String normalizeJsonString(String json) {
-        // Ensure there's a space after each colon for consistent formatting
-        // This matches the format expected by tests
-        json = json.replaceAll(":(\\S)", ": $1");
-        return json;
+        // Only normalize if JSON contains patterns that need normalization
+        // Check for colon without space after it (e.g., "key:value" should be "key: value")
+        if (json.length() < MIN_JSON_LENGTH_FOR_NORMALIZATION || !json.contains(":")) {
+            return json; // Too short or no colons, no normalization needed
+        }
+        
+        // Only apply regex if we detect the pattern that needs normalization
+        if (json.contains(JSON_COLON_SPACE)) {
+            // Already normalized, return as-is
+            return json;
+        }
+        
+        // Apply normalization only when needed
+        return json.replaceAll(JSON_COLON_NO_SPACE_PATTERN, JSON_COLON_WITH_SPACE_REPLACEMENT);
     }
 
     /**
