@@ -1,5 +1,62 @@
 #include "blyfastnative.h"
 
+// Cached JNI class and method IDs for performance
+static jclass cachedHashMapClass = NULL;
+static jclass cachedArrayListClass = NULL;
+static jclass cachedBooleanClass = NULL;
+static jclass cachedLongClass = NULL;
+static jclass cachedDoubleClass = NULL;
+static jmethodID cachedHashMapConstructor = NULL;
+static jmethodID cachedHashMapPut = NULL;
+static jmethodID cachedArrayListConstructor = NULL;
+static jmethodID cachedArrayListAdd = NULL;
+static jfieldID cachedBooleanTrueField = NULL;
+static jfieldID cachedBooleanFalseField = NULL;
+static jmethodID cachedLongConstructor = NULL;
+static jmethodID cachedDoubleConstructor = NULL;
+static int jniCacheInitialized = 0;
+
+// Initialize JNI cache - automatically called on first use or from JNI_OnLoad
+void initJsonParserCache(JNIEnv *env) {
+    if (jniCacheInitialized || env == NULL) return;
+    
+    cachedHashMapClass = (*env)->FindClass(env, "java/util/HashMap");
+    if (cachedHashMapClass) {
+        cachedHashMapClass = (jclass)(*env)->NewGlobalRef(env, cachedHashMapClass);
+        cachedHashMapConstructor = (*env)->GetMethodID(env, cachedHashMapClass, "<init>", "()V");
+        cachedHashMapPut = (*env)->GetMethodID(env, cachedHashMapClass, "put", 
+                                               "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+    }
+    
+    cachedArrayListClass = (*env)->FindClass(env, "java/util/ArrayList");
+    if (cachedArrayListClass) {
+        cachedArrayListClass = (jclass)(*env)->NewGlobalRef(env, cachedArrayListClass);
+        cachedArrayListConstructor = (*env)->GetMethodID(env, cachedArrayListClass, "<init>", "()V");
+        cachedArrayListAdd = (*env)->GetMethodID(env, cachedArrayListClass, "add", "(Ljava/lang/Object;)Z");
+    }
+    
+    cachedBooleanClass = (*env)->FindClass(env, "java/lang/Boolean");
+    if (cachedBooleanClass) {
+        cachedBooleanClass = (jclass)(*env)->NewGlobalRef(env, cachedBooleanClass);
+        cachedBooleanTrueField = (*env)->GetStaticFieldID(env, cachedBooleanClass, "TRUE", "Ljava/lang/Boolean;");
+        cachedBooleanFalseField = (*env)->GetStaticFieldID(env, cachedBooleanClass, "FALSE", "Ljava/lang/Boolean;");
+    }
+    
+    cachedLongClass = (*env)->FindClass(env, "java/lang/Long");
+    if (cachedLongClass) {
+        cachedLongClass = (jclass)(*env)->NewGlobalRef(env, cachedLongClass);
+        cachedLongConstructor = (*env)->GetMethodID(env, cachedLongClass, "<init>", "(J)V");
+    }
+    
+    cachedDoubleClass = (*env)->FindClass(env, "java/lang/Double");
+    if (cachedDoubleClass) {
+        cachedDoubleClass = (jclass)(*env)->NewGlobalRef(env, cachedDoubleClass);
+        cachedDoubleConstructor = (*env)->GetMethodID(env, cachedDoubleClass, "<init>", "(D)V");
+    }
+    
+    jniCacheInitialized = 1;
+}
+
 // Skip whitespace characters - optimized with lookup table
 void skipWhitespace(const char **cursor, const char *end) {
     while (*cursor < end) {
@@ -37,22 +94,28 @@ jobject parseJsonValue(JNIEnv *env, const char **cursor, const char *end) {
             // Parse 'true'
             if (*cursor + 4 <= end && strncmp(*cursor, "true", 4) == 0) {
                 *cursor += 4;
-                jclass booleanClass = (*env)->FindClass(env, "java/lang/Boolean");
-                if (booleanClass == NULL) return NULL;
-                jfieldID trueField = (*env)->GetStaticFieldID(env, booleanClass, "TRUE", "Ljava/lang/Boolean;");
-                if (trueField == NULL) return NULL;
-                return (*env)->GetStaticObjectField(env, booleanClass, trueField);
+                if (!cachedBooleanClass) {
+                    initJsonParserCache(env);
+                }
+                if (cachedBooleanClass && cachedBooleanTrueField) {
+                    jobject result = (*env)->GetStaticObjectField(env, cachedBooleanClass, cachedBooleanTrueField);
+                    CHECK_JNI_EXCEPTION(env);
+                    return result;
+                }
             }
             return NULL;
         case 'f':
             // Parse 'false'
             if (*cursor + 5 <= end && strncmp(*cursor, "false", 5) == 0) {
                 *cursor += 5;
-                jclass booleanClass = (*env)->FindClass(env, "java/lang/Boolean");
-                if (booleanClass == NULL) return NULL;
-                jfieldID falseField = (*env)->GetStaticFieldID(env, booleanClass, "FALSE", "Ljava/lang/Boolean;");
-                if (falseField == NULL) return NULL;
-                return (*env)->GetStaticObjectField(env, booleanClass, falseField);
+                if (!cachedBooleanClass) {
+                    initJsonParserCache(env);
+                }
+                if (cachedBooleanClass && cachedBooleanFalseField) {
+                    jobject result = (*env)->GetStaticObjectField(env, cachedBooleanClass, cachedBooleanFalseField);
+                    CHECK_JNI_EXCEPTION(env);
+                    return result;
+                }
             }
             return NULL;
         case 'n':
@@ -84,22 +147,19 @@ jobject parseJsonObject(JNIEnv *env, const char **cursor, const char *end) {
     // Skip opening brace
     (*cursor)++;
     
-    // Create a HashMap
-    jclass mapClass = (*env)->FindClass(env, "java/util/HashMap");
-    if (mapClass == NULL) return NULL;
+    // Initialize cache if needed
+    if (!cachedHashMapClass) {
+        initJsonParserCache(env);
+    }
     
-    jmethodID mapConstructor = (*env)->GetMethodID(env, mapClass, "<init>", "()V");
-    if (mapConstructor == NULL) return NULL;
-    
-    jobject map = (*env)->NewObject(env, mapClass, mapConstructor);
-    if (map == NULL) return NULL;
-    
-    jmethodID putMethod = (*env)->GetMethodID(env, mapClass, "put", 
-                                             "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
-    if (putMethod == NULL) {
-        (*env)->DeleteLocalRef(env, map);
+    // Use cached HashMap class and methods
+    if (!cachedHashMapClass || !cachedHashMapConstructor || !cachedHashMapPut) {
         return NULL;
     }
+    
+    jobject map = (*env)->NewObject(env, cachedHashMapClass, cachedHashMapConstructor);
+    CHECK_JNI_EXCEPTION(env);
+    if (map == NULL) return NULL;
     
     skipWhitespace(cursor, end);
     
@@ -145,7 +205,12 @@ jobject parseJsonObject(JNIEnv *env, const char **cursor, const char *end) {
         
         // Add key-value pair to the map
         // Note: value can be NULL for JSON null
-        (*env)->CallObjectMethod(env, map, putMethod, key, value);
+        (*env)->CallObjectMethod(env, map, cachedHashMapPut, key, value);
+        CHECK_JNI_EXCEPTION_CLEANUP(env, {
+            (*env)->DeleteLocalRef(env, key);
+            if (value != NULL) (*env)->DeleteLocalRef(env, value);
+            (*env)->DeleteLocalRef(env, map);
+        });
         
         // Clean up references
         (*env)->DeleteLocalRef(env, key);
@@ -179,21 +244,19 @@ jobject parseJsonArray(JNIEnv *env, const char **cursor, const char *end) {
     // Skip opening bracket
     (*cursor)++;
     
-    // Create an ArrayList
-    jclass listClass = (*env)->FindClass(env, "java/util/ArrayList");
-    if (listClass == NULL) return NULL;
+    // Initialize cache if needed
+    if (!cachedArrayListClass) {
+        initJsonParserCache(env);
+    }
     
-    jmethodID listConstructor = (*env)->GetMethodID(env, listClass, "<init>", "()V");
-    if (listConstructor == NULL) return NULL;
-    
-    jobject list = (*env)->NewObject(env, listClass, listConstructor);
-    if (list == NULL) return NULL;
-    
-    jmethodID addMethod = (*env)->GetMethodID(env, listClass, "add", "(Ljava/lang/Object;)Z");
-    if (addMethod == NULL) {
-        (*env)->DeleteLocalRef(env, list);
+    // Use cached ArrayList class and methods
+    if (!cachedArrayListClass || !cachedArrayListConstructor || !cachedArrayListAdd) {
         return NULL;
     }
+    
+    jobject list = (*env)->NewObject(env, cachedArrayListClass, cachedArrayListConstructor);
+    CHECK_JNI_EXCEPTION(env);
+    if (list == NULL) return NULL;
     
     skipWhitespace(cursor, end);
     
@@ -210,7 +273,11 @@ jobject parseJsonArray(JNIEnv *env, const char **cursor, const char *end) {
         
         // Add value to the list
         // Note: For null values, we still need to add them to maintain array indices
-        (*env)->CallBooleanMethod(env, list, addMethod, value);
+        (*env)->CallBooleanMethod(env, list, cachedArrayListAdd, value);
+        CHECK_JNI_EXCEPTION_CLEANUP(env, {
+            if (value != NULL) (*env)->DeleteLocalRef(env, value);
+            (*env)->DeleteLocalRef(env, list);
+        });
         
         // Clean up the value reference
         if (value != NULL) (*env)->DeleteLocalRef(env, value);
@@ -334,21 +401,61 @@ jobject parseJsonString(JNIEnv *env, const char **cursor, const char *end) {
                     // UTF-8 encoding
                     if (hexValue < 0x80) {
                         buffer[bufPos++] = (char)hexValue;
+                        *cursor += 4; // Skip the 4 hex digits
                     } else if (hexValue < 0x800) {
                         buffer[bufPos++] = (char)(0xC0 | (hexValue >> 6));
                         buffer[bufPos++] = (char)(0x80 | (hexValue & 0x3F));
+                        *cursor += 4; // Skip the 4 hex digits
                     } else if (hexValue < 0xD800 || hexValue >= 0xE000) {
-                        // Regular 3-byte UTF-8
+                        // Regular 3-byte UTF-8 (including BMP characters)
                         buffer[bufPos++] = (char)(0xE0 | (hexValue >> 12));
                         buffer[bufPos++] = (char)(0x80 | ((hexValue >> 6) & 0x3F));
                         buffer[bufPos++] = (char)(0x80 | (hexValue & 0x3F));
+                        *cursor += 4; // Skip the 4 hex digits
+                    } else if (hexValue >= 0xD800 && hexValue < 0xDC00) {
+                        // High surrogate - need to read low surrogate
+                        // Check if we have space for the next escape sequence
+                        if (*cursor + 9 >= end || (*cursor)[5] != '\\' || (*cursor)[6] != 'u') {
+                            free(buffer);
+                            return NULL; // Incomplete surrogate pair
+                        }
+                        
+                        // Parse low surrogate
+                        int lowSurrogate = 0;
+                        for (int i = 7; i <= 10; i++) {
+                            int digit = hexCharToInt((*cursor)[i]);
+                            if (digit < 0) {
+                                free(buffer);
+                                return NULL; // Invalid hex digit
+                            }
+                            lowSurrogate = (lowSurrogate << 4) | digit;
+                        }
+                        
+                        // Validate low surrogate
+                        if (lowSurrogate < 0xDC00 || lowSurrogate >= 0xE000) {
+                            free(buffer);
+                            return NULL; // Invalid surrogate pair
+                        }
+                        
+                        // Convert surrogate pair to code point
+                        int codePoint = 0x10000 + ((hexValue - 0xD800) << 10) + (lowSurrogate - 0xDC00);
+                        
+                        // Encode as 4-byte UTF-8
+                        buffer[bufPos++] = (char)(0xF0 | (codePoint >> 18));
+                        buffer[bufPos++] = (char)(0x80 | ((codePoint >> 12) & 0x3F));
+                        buffer[bufPos++] = (char)(0x80 | ((codePoint >> 6) & 0x3F));
+                        buffer[bufPos++] = (char)(0x80 | (codePoint & 0x3F));
+                        
+                        // Skip both escape sequences: \uXXXX\uXXXX
+                        // cursor points to 'u', so skip: u(1) + XXXX(4) + \u(2) + XXXX(4) = 11 chars
+                        *cursor += 11;
+                        // Don't increment cursor again - break out of switch
+                        break;
                     } else {
-                        // Surrogate pair - simplified handling
+                        // Low surrogate (0xDC00-0xDFFF) without high surrogate - invalid
                         free(buffer);
-                        return NULL; // Surrogate pairs not fully supported
+                        return NULL;
                     }
-                    
-                    *cursor += 4; // Skip the 4 hex digits
                     break;
                 default:
                     // Invalid escape sequence
@@ -442,7 +549,7 @@ jobject parseJsonNumber(JNIEnv *env, const char **cursor, const char *end) {
     
     // Extract the number string
     size_t len = *cursor - start;
-    if (len == 0 || len > 64) {  // Reasonable limit
+    if (len == 0 || len > MAX_JSON_NUMBER_LEN) {
         return NULL;
     }
     
@@ -455,25 +562,24 @@ jobject parseJsonNumber(JNIEnv *env, const char **cursor, const char *end) {
     
     jobject result = NULL;
     
+    // Initialize cache if needed
+    if (!cachedDoubleClass || !cachedLongClass) {
+        initJsonParserCache(env);
+    }
+    
     if (isFloatingPoint) {
         // Create a Double object
         jdouble value = strtod(numStr, NULL);
-        jclass doubleClass = (*env)->FindClass(env, "java/lang/Double");
-        if (doubleClass != NULL) {
-            jmethodID doubleConstructor = (*env)->GetMethodID(env, doubleClass, "<init>", "(D)V");
-            if (doubleConstructor != NULL) {
-                result = (*env)->NewObject(env, doubleClass, doubleConstructor, value);
-            }
+        if (cachedDoubleClass && cachedDoubleConstructor) {
+            result = (*env)->NewObject(env, cachedDoubleClass, cachedDoubleConstructor, value);
+            CHECK_JNI_EXCEPTION(env);
         }
     } else {
         // Check if the number fits in a Long
         long long llvalue = strtoll(numStr, NULL, 10);
-        jclass longClass = (*env)->FindClass(env, "java/lang/Long");
-        if (longClass != NULL) {
-            jmethodID longConstructor = (*env)->GetMethodID(env, longClass, "<init>", "(J)V");
-            if (longConstructor != NULL) {
-                result = (*env)->NewObject(env, longClass, longConstructor, (jlong)llvalue);
-            }
+        if (cachedLongClass && cachedLongConstructor) {
+            result = (*env)->NewObject(env, cachedLongClass, cachedLongConstructor, (jlong)llvalue);
+            CHECK_JNI_EXCEPTION(env);
         }
     }
     

@@ -22,7 +22,7 @@ JNIEXPORT jstring JNICALL Java_com_blyfast_nativeopt_NativeOptimizer_nativeEscap
     
     // Pre-allocate buffer with better size estimation
     // Most strings don't need escaping, so start with 1.2x size
-    size_t bufSize = length * 2 + 64;  // Better initial estimate
+    size_t bufSize = length * 2 + INITIAL_ESCAPE_BUFFER_SIZE;  // Better initial estimate
     char *buffer = (char *)malloc(bufSize);
     if (buffer == NULL) {
         (*env)->ReleaseStringUTFChars(env, input, utf8Str);
@@ -32,7 +32,8 @@ JNIEXPORT jstring JNICALL Java_com_blyfast_nativeopt_NativeOptimizer_nativeEscap
     size_t pos = 0;
     for (size_t i = 0; i < length; i++) {
         // Check if we need to expand buffer
-        if (pos + 6 >= bufSize) {
+        // Need space for up to 6 chars (\uXXXX) + null terminator = 7 bytes
+        if (pos + 7 >= bufSize) {
             bufSize = bufSize * 2;
             char *newBuffer = (char *)realloc(buffer, bufSize);
             if (newBuffer == NULL) {
@@ -96,6 +97,7 @@ JNIEXPORT jstring JNICALL Java_com_blyfast_nativeopt_NativeOptimizer_nativeEscap
     
     // Create a new Java string
     jstring result = (*env)->NewStringUTF(env, buffer);
+    CHECK_JNI_EXCEPTION(env);
     
     // Clean up
     free(buffer);
@@ -136,6 +138,7 @@ JNIEXPORT jobject JNICALL Java_com_blyfast_nativeopt_NativeOptimizer_nativeParse
     
     // Verify we consumed all input (after whitespace)
     if (result != NULL) {
+        CHECK_JNI_EXCEPTION(env);
         skipWhitespace(&cursor, end);
         if (cursor < end) {
             // Extra data after JSON value - invalid
@@ -152,7 +155,8 @@ JNIEXPORT jobject JNICALL Java_com_blyfast_nativeopt_NativeOptimizer_nativeParse
 
 /**
  * Optimized string to bytes conversion with direct memory
- * NOTE: Memory is managed by Java's ByteBuffer cleanup mechanism
+ * Uses Java-managed memory to avoid memory leaks
+ * Note: NewDirectByteBuffer does NOT free malloc'd memory automatically
  */
 JNIEXPORT jobject JNICALL Java_com_blyfast_nativeopt_NativeOptimizer_nativeStringToBytes
   (JNIEnv *env, jclass cls, jstring input) {
@@ -167,28 +171,47 @@ JNIEXPORT jobject JNICALL Java_com_blyfast_nativeopt_NativeOptimizer_nativeStrin
     }
     
     // Calculate the length of the input string
-    size_t length = (*env)->GetStringUTFLength(env, input);
+    jsize length = (*env)->GetStringUTFLength(env, input);
     
-    // Allocate a direct buffer
-    // Note: This memory will be freed when the ByteBuffer is garbage collected
-    // In production, consider using a cleaner or explicit free method
-    char *directBuffer = (char *)malloc(length);
-    if (directBuffer == NULL) {
+    // Create a Java byte array (Java-managed memory)
+    jbyteArray byteArray = (*env)->NewByteArray(env, length);
+    if (byteArray == NULL) {
         (*env)->ReleaseStringUTFChars(env, input, utf8Str);
+        CHECK_JNI_EXCEPTION(env);
         return NULL; // OutOfMemoryError
     }
     
-    // Copy the string data to the direct buffer
-    memcpy(directBuffer, utf8Str, length);
-    
-    // Create a new ByteBuffer that owns the direct buffer
-    jobject result = (*env)->NewDirectByteBuffer(env, directBuffer, length);
+    // Copy the string data to the byte array
+    (*env)->SetByteArrayRegion(env, byteArray, 0, length, (jbyte*)utf8Str);
+    CHECK_JNI_EXCEPTION(env);
     
     // Release the string
     (*env)->ReleaseStringUTFChars(env, input, utf8Str);
     
-    // Note: The directBuffer memory will be managed by Java's GC system
-    // For production use, consider registering a cleaner callback
+    // Wrap the byte array in a ByteBuffer
+    // First get the ByteBuffer class and its wrap method
+    jclass byteBufferClass = (*env)->FindClass(env, "java/nio/ByteBuffer");
+    if (byteBufferClass == NULL) {
+        (*env)->DeleteLocalRef(env, byteArray);
+        CHECK_JNI_EXCEPTION(env);
+        return NULL;
+    }
+    
+    jmethodID wrapMethod = (*env)->GetStaticMethodID(env, byteBufferClass, "wrap", "([B)Ljava/nio/ByteBuffer;");
+    if (wrapMethod == NULL) {
+        (*env)->DeleteLocalRef(env, byteBufferClass);
+        (*env)->DeleteLocalRef(env, byteArray);
+        CHECK_JNI_EXCEPTION(env);
+        return NULL;
+    }
+    
+    jobject result = (*env)->CallStaticObjectMethod(env, byteBufferClass, wrapMethod, byteArray);
+    CHECK_JNI_EXCEPTION(env);
+    
+    // Clean up local references
+    (*env)->DeleteLocalRef(env, byteBufferClass);
+    (*env)->DeleteLocalRef(env, byteArray);
+    
     return result;
 }
 
@@ -248,13 +271,8 @@ JNIEXPORT jint JNICALL Java_com_blyfast_nativeopt_NativeOptimizer_nativeAnalyzeH
         if (ctStr != NULL) {
             // Case-insensitive matching using portable function
             if (strcasestr_portable(ctStr, "application/json") != NULL) {
-                bodyType = 1; // JSON
                 // Simple validation - check if it starts with { or [
-                if (length > 0 && (buffer[0] == '{' || buffer[0] == '[')) {
-                    bodyType = 1;
-                } else {
-                    bodyType = 0;
-                }
+                bodyType = (length > 0 && (buffer[0] == '{' || buffer[0] == '[')) ? 1 : 0;
             } else if (strcasestr_portable(ctStr, "application/x-www-form-urlencoded") != NULL) {
                 bodyType = 2; // Form data
             } else if (strcasestr_portable(ctStr, "multipart/form-data") != NULL) {
@@ -355,7 +373,7 @@ JNIEXPORT jint JNICALL Java_com_blyfast_nativeopt_NativeOptimizer_nativeFastDete
     int textChars = 0;
     int binaryChars = 0;
     
-    int checkLen = length > 200 ? 200 : length;
+    int checkLen = length > CONTENT_TYPE_CHECK_LEN ? CONTENT_TYPE_CHECK_LEN : length;
     for (int i = 0; i < checkLen; i++) {
         char c = buffer[i];
         if (c == '=') hasEquals++;
@@ -369,9 +387,12 @@ JNIEXPORT jint JNICALL Java_com_blyfast_nativeopt_NativeOptimizer_nativeFastDete
     }
     
     // Determine if text or binary
-    if (binaryChars > checkLen / 10) { // More than 10% binary chars
+    int binaryThreshold = checkLen * BINARY_CHAR_THRESHOLD_PERCENT / 100;
+    int textThreshold = checkLen * TEXT_CHAR_THRESHOLD_PERCENT / 100;
+    
+    if (binaryChars > binaryThreshold) {
         return 5; // Binary
-    } else if (textChars > checkLen * 0.9) { // More than 90% text chars
+    } else if (textChars > textThreshold) {
         return 4; // Text
     } else {
         // Mixed content, default to text

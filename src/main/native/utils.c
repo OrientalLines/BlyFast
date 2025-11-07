@@ -7,6 +7,10 @@ pthread_mutex_t headers_mutex = PTHREAD_MUTEX_INITIALIZER;
 ParsedHeaders* headers_storage[MAX_HEADERS];
 volatile int next_header_id = 1;
 
+// Free list for efficient slot management
+int free_header_slots[MAX_HEADERS];
+int free_header_count = 0;
+
 // Helper function to free a linked list of headers
 void freeHeadersList(HeaderValue* header) {
     while (header != NULL) {
@@ -55,23 +59,46 @@ const char* strcasestr_portable(const char* haystack, const char* needle) {
     return NULL;
 }
 
-// URL decode function - decodes %XX sequences
+// URL decode function - decodes %XX sequences with bounds checking
 int urlDecode(char* dest, const char* src, int len) {
+    if (dest == NULL || src == NULL || len < 0) {
+        return 0;
+    }
+    
     int i, j = 0;
-    for (i = 0; i < len; i++) {
+    // Maximum expansion is 1:1 (no expansion), but we need space for null terminator
+    int maxDestLen = len + 1;
+    
+    for (i = 0; i < len && j < maxDestLen - 1; i++) {
         if (src[i] == '%' && i + 2 < len) {
             int high = hexCharToInt(src[i + 1]);
             int low = hexCharToInt(src[i + 2]);
             if (high >= 0 && low >= 0) {
-                dest[j++] = (char)((high << 4) | low);
-                i += 2;
+                if (j < maxDestLen - 1) {
+                    dest[j++] = (char)((high << 4) | low);
+                    i += 2;
+                } else {
+                    break; // Buffer full
+                }
             } else {
-                dest[j++] = src[i];
+                if (j < maxDestLen - 1) {
+                    dest[j++] = src[i];
+                } else {
+                    break;
+                }
             }
         } else if (src[i] == '+') {
-            dest[j++] = ' ';
+            if (j < maxDestLen - 1) {
+                dest[j++] = ' ';
+            } else {
+                break;
+            }
         } else {
-            dest[j++] = src[i];
+            if (j < maxDestLen - 1) {
+                dest[j++] = src[i];
+            } else {
+                break;
+            }
         }
     }
     dest[j] = '\0';

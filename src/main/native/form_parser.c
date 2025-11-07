@@ -12,7 +12,12 @@ jobject parseFormData(JNIEnv *env, char* buffer, jint length) {
     // Format: Each entry has [key_length:4][value_length:4][key][value]
     // with entries packed one after another
     // We allocate more space to account for URL decoding expansion
-    char* result = (char*)malloc(length * 3); // Extra space for URL decoding
+    // Check for integer overflow before multiplication
+    if (length > SIZE_MAX / MAX_FORM_DATA_EXPANSION) {
+        return NULL; // Integer overflow would occur
+    }
+    size_t maxResultSize = (size_t)length * MAX_FORM_DATA_EXPANSION;
+    char* result = (char*)malloc(maxResultSize);
     if (result == NULL) {
         return NULL;
     }
@@ -30,6 +35,7 @@ jobject parseFormData(JNIEnv *env, char* buffer, jint length) {
     int resultPos = 0;
     int keyStart = 0;
     int valueStart = -1;
+    size_t maxResultPos = maxResultSize - 1; // Leave room for safety
     
     for (int i = 0; i <= length; i++) {
         char c = (i < length) ? buffer[i] : '&'; // Add a virtual & at the end to process the last pair
@@ -40,6 +46,14 @@ jobject parseFormData(JNIEnv *env, char* buffer, jint length) {
             
             // URL decode the key
             int decodedKeyLen = urlDecode(keyBuffer, buffer + keyStart, keyLength);
+            
+            // Bounds check before writing
+            if (resultPos + 4 + decodedKeyLen > maxResultPos) {
+                free(result);
+                free(keyBuffer);
+                free(valueBuffer);
+                return NULL; // Buffer overflow protection
+            }
             
             // Write key length (4 bytes)
             *((int*)(result + resultPos)) = decodedKeyLen;
@@ -62,6 +76,14 @@ jobject parseFormData(JNIEnv *env, char* buffer, jint length) {
             // URL decode the value
             int decodedValueLen = urlDecode(valueBuffer, buffer + valueStart, valueLength);
             
+            // Bounds check before writing
+            if (resultPos + 4 + decodedValueLen > maxResultPos) {
+                free(result);
+                free(keyBuffer);
+                free(valueBuffer);
+                return NULL; // Buffer overflow protection
+            }
+            
             // Write value length (4 bytes)
             *((int*)(result + resultPos)) = decodedValueLen;
             resultPos += 4;
@@ -80,10 +102,45 @@ jobject parseFormData(JNIEnv *env, char* buffer, jint length) {
     free(keyBuffer);
     free(valueBuffer);
     
-    // Create a direct ByteBuffer with the result
-    jobject resultBuffer = (*env)->NewDirectByteBuffer(env, result, resultPos);
+    // Create a Java byte array (Java-managed memory) to avoid memory leaks
+    // NewDirectByteBuffer does NOT free malloc'd memory automatically
+    jbyteArray byteArray = (*env)->NewByteArray(env, resultPos);
+    if (byteArray == NULL) {
+        free(result);
+        CHECK_JNI_EXCEPTION(env);
+        return NULL;
+    }
     
-    // Note: Memory will be managed by Java's ByteBuffer cleanup
+    // Copy data to Java-managed memory
+    (*env)->SetByteArrayRegion(env, byteArray, 0, resultPos, (jbyte*)result);
+    CHECK_JNI_EXCEPTION(env);
+    
+    // Free the malloc'd buffer
+    free(result);
+    
+    // Wrap the byte array in a ByteBuffer
+    jclass byteBufferClass = (*env)->FindClass(env, "java/nio/ByteBuffer");
+    if (byteBufferClass == NULL) {
+        (*env)->DeleteLocalRef(env, byteArray);
+        CHECK_JNI_EXCEPTION(env);
+        return NULL;
+    }
+    
+    jmethodID wrapMethod = (*env)->GetStaticMethodID(env, byteBufferClass, "wrap", "([B)Ljava/nio/ByteBuffer;");
+    if (wrapMethod == NULL) {
+        (*env)->DeleteLocalRef(env, byteBufferClass);
+        (*env)->DeleteLocalRef(env, byteArray);
+        CHECK_JNI_EXCEPTION(env);
+        return NULL;
+    }
+    
+    jobject resultBuffer = (*env)->CallStaticObjectMethod(env, byteBufferClass, wrapMethod, byteArray);
+    CHECK_JNI_EXCEPTION(env);
+    
+    // Clean up local references
+    (*env)->DeleteLocalRef(env, byteBufferClass);
+    (*env)->DeleteLocalRef(env, byteArray);
+    
     return resultBuffer;
 }
 
@@ -114,7 +171,7 @@ jobject parseMultipartForm(JNIEnv *env, char* buffer, jint length) {
     } MultipartPart;
     
     // Max number of parts we'll process
-    #define MAX_PARTS 100
+    // Using constant from header
     
     // Allocate array for tracking parts
     MultipartPart parts[MAX_PARTS];
@@ -124,7 +181,7 @@ jobject parseMultipartForm(JNIEnv *env, char* buffer, jint length) {
     memset(parts, 0, sizeof(parts));
     
     // Find the boundary
-    char boundary[256] = {0};
+    char boundary[MAX_BOUNDARY_LEN] = {0};
     int boundaryLen = 0;
     
     // Extract boundary from the data
@@ -142,7 +199,7 @@ jobject parseMultipartForm(JNIEnv *env, char* buffer, jint length) {
                     break;
                 }
                 // Safeguard against too long boundary
-                if (k - j > 200 || k - j >= sizeof(boundary) - 1) {
+                if (k - j > MAX_BOUNDARY_LEN - 1 || k - j >= sizeof(boundary) - 1) {
                     break;
                 }
             }
@@ -279,7 +336,7 @@ jobject parseMultipartForm(JNIEnv *env, char* buffer, jint length) {
                     char* nameEnd = strchr(nameStart, '"');
                     if (nameEnd) {
                         int nameLen = nameEnd - nameStart;
-                        if (nameLen > 0 && nameLen < 1024) { // Reasonable limit check
+                        if (nameLen > 0 && nameLen < MAX_HEADER_NAME_LEN) {
                             part->name = malloc(nameLen + 1);
                             if (part->name) {
                                 memcpy(part->name, nameStart, nameLen);
@@ -296,7 +353,7 @@ jobject parseMultipartForm(JNIEnv *env, char* buffer, jint length) {
                     char* filenameEnd = strchr(filenameStart, '"');
                     if (filenameEnd) {
                         int filenameLen = filenameEnd - filenameStart;
-                        if (filenameLen > 0 && filenameLen < 1024) { // Reasonable limit check
+                        if (filenameLen > 0 && filenameLen < MAX_HEADER_NAME_LEN) {
                             part->filename = malloc(filenameLen + 1);
                             if (part->filename) {
                                 memcpy(part->filename, filenameStart, filenameLen);
@@ -313,7 +370,7 @@ jobject parseMultipartForm(JNIEnv *env, char* buffer, jint length) {
                 while (*valueStart == ' ' || *valueStart == '\t') valueStart++;
                 
                 int valueLen = strlen(valueStart);
-                if (valueLen > 0 && valueLen < 256) { // Reasonable limit check
+                if (valueLen > 0 && valueLen < MAX_CONTENT_TYPE_LEN) {
                     part->contentType = malloc(valueLen + 1);
                     if (part->contentType) {
                         memcpy(part->contentType, valueStart, valueLen);
@@ -371,19 +428,25 @@ jobject parseMultipartForm(JNIEnv *env, char* buffer, jint length) {
     // [name_len:4][filename_len:4][content_type_len:4][data_len:4][is_file:1]
     // [name][filename][content_type][data]
     
-    // Calculate required size
+    // Calculate required size with overflow protection
     size_t totalSize = 4; // part count
     for (int i = 0; i < partCount; i++) {
         MultipartPart* part = &parts[i];
-        totalSize += 4 + 4 + 4 + 4 + 1; // lengths and is_file flag
+        size_t partSize = 4 + 4 + 4 + 4 + 1; // lengths and is_file flag
         
-        totalSize += part->name ? strlen(part->name) : 0;
-        totalSize += part->filename ? strlen(part->filename) : 0;
-        totalSize += part->contentType ? strlen(part->contentType) : 0;
-        totalSize += part->dataLength;
+        partSize += part->name ? strlen(part->name) : 0;
+        partSize += part->filename ? strlen(part->filename) : 0;
+        partSize += part->contentType ? strlen(part->contentType) : 0;
+        partSize += part->dataLength;
         
         // Add padding for alignment if needed
-        totalSize = (totalSize + 3) & ~3; // Align to 4 bytes
+        partSize = (partSize + 3) & ~3; // Align to 4 bytes
+        
+        // Check for overflow
+        if (totalSize > SIZE_MAX - partSize) {
+            goto cleanup; // Integer overflow
+        }
+        totalSize += partSize;
     }
     
     // Allocate result buffer
@@ -406,6 +469,12 @@ jobject parseMultipartForm(JNIEnv *env, char* buffer, jint length) {
         int filenameLen = part->filename ? strlen(part->filename) : 0;
         int contentTypeLen = part->contentType ? strlen(part->contentType) : 0;
         
+        // Bounds checking before each write
+        if (resultPos + 17 > totalSize) { // 4+4+4+4+1 = 17 minimum
+            free(result);
+            goto cleanup;
+        }
+        
         // Write header lengths and is_file flag
         *((int*)(result + resultPos)) = nameLen;
         resultPos += 4;
@@ -419,28 +488,44 @@ jobject parseMultipartForm(JNIEnv *env, char* buffer, jint length) {
         
         // Write strings with bounds checking
         if (nameLen > 0 && part->name) {
+            if (resultPos + nameLen > totalSize) {
+                free(result);
+                goto cleanup;
+            }
             memcpy(result + resultPos, part->name, nameLen);
             resultPos += nameLen;
         }
         
         if (filenameLen > 0 && part->filename) {
+            if (resultPos + filenameLen > totalSize) {
+                free(result);
+                goto cleanup;
+            }
             memcpy(result + resultPos, part->filename, filenameLen);
             resultPos += filenameLen;
         }
         
         if (contentTypeLen > 0 && part->contentType) {
+            if (resultPos + contentTypeLen > totalSize) {
+                free(result);
+                goto cleanup;
+            }
             memcpy(result + resultPos, part->contentType, contentTypeLen);
             resultPos += contentTypeLen;
         }
         
         // Write data with bounds checking
         if (part->dataLength > 0 && part->data) {
+            if (resultPos + part->dataLength > totalSize) {
+                free(result);
+                goto cleanup;
+            }
             memcpy(result + resultPos, part->data, part->dataLength);
             resultPos += part->dataLength;
         }
         
         // Align to 4 bytes if needed
-        while (resultPos % 4 != 0) {
+        while (resultPos % 4 != 0 && resultPos < totalSize) {
             result[resultPos++] = 0;
         }
     }
@@ -457,13 +542,50 @@ jobject parseMultipartForm(JNIEnv *env, char* buffer, jint length) {
     free(boundaryStart);
     free(boundaryEnd);
     
-    // Create a direct ByteBuffer with the result
-    jobject resultBuffer = (*env)->NewDirectByteBuffer(env, result, totalSize);
-    if (resultBuffer == NULL) {
-        // Failed to create ByteBuffer, clean up
+    // Create a Java byte array (Java-managed memory) to avoid memory leaks
+    // NewDirectByteBuffer does NOT free malloc'd memory automatically
+    jbyteArray byteArray = (*env)->NewByteArray(env, totalSize);
+    if (byteArray == NULL) {
         free(result);
+        CHECK_JNI_EXCEPTION(env);
         return NULL;
     }
+    
+    // Copy data to Java-managed memory
+    (*env)->SetByteArrayRegion(env, byteArray, 0, totalSize, (jbyte*)result);
+    CHECK_JNI_EXCEPTION(env);
+    
+    // Free the malloc'd buffer
+    free(result);
+    
+    // Wrap the byte array in a ByteBuffer
+    jclass byteBufferClass = (*env)->FindClass(env, "java/nio/ByteBuffer");
+    if (byteBufferClass == NULL) {
+        (*env)->DeleteLocalRef(env, byteArray);
+        CHECK_JNI_EXCEPTION(env);
+        return NULL;
+    }
+    
+    jmethodID wrapMethod = (*env)->GetStaticMethodID(env, byteBufferClass, "wrap", "([B)Ljava/nio/ByteBuffer;");
+    if (wrapMethod == NULL) {
+        (*env)->DeleteLocalRef(env, byteBufferClass);
+        (*env)->DeleteLocalRef(env, byteArray);
+        CHECK_JNI_EXCEPTION(env);
+        return NULL;
+    }
+    
+    jobject resultBuffer = (*env)->CallStaticObjectMethod(env, byteBufferClass, wrapMethod, byteArray);
+    CHECK_JNI_EXCEPTION(env);
+    if (resultBuffer == NULL) {
+        // Failed to create ByteBuffer, clean up
+        (*env)->DeleteLocalRef(env, byteBufferClass);
+        (*env)->DeleteLocalRef(env, byteArray);
+        return NULL;
+    }
+    
+    // Clean up local references
+    (*env)->DeleteLocalRef(env, byteBufferClass);
+    (*env)->DeleteLocalRef(env, byteArray);
     
     return resultBuffer;
 

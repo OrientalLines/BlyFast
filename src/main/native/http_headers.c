@@ -25,22 +25,32 @@ JNIEXPORT jlong JNICALL Java_com_blyfast_nativeopt_NativeOptimizer_nativeParseHt
     headers->first = NULL;
     headers->count = 0;
     
-    // Thread-safe ID assignment
+    // Thread-safe ID assignment with free list optimization
     pthread_mutex_lock(&headers_mutex);
-    jlong newId = next_header_id++;
-    if (newId >= MAX_HEADERS) {
-        // Wrap around and find available slot
-        newId = 1;
-        while (newId < MAX_HEADERS && headers_storage[newId] != NULL) {
-            newId++;
-        }
+    jlong newId = 0;
+    
+    // First try free list (O(1))
+    if (free_header_count > 0) {
+        newId = free_header_slots[--free_header_count];
+    } else {
+        // Use sequential allocation
+        newId = next_header_id++;
         if (newId >= MAX_HEADERS) {
-            pthread_mutex_unlock(&headers_mutex);
-            free(headers);
-            return 0; // No available slots
+            // Wrap around and find available slot
+            newId = 1;
+            while (newId < MAX_HEADERS && headers_storage[newId] != NULL) {
+                newId++;
+            }
+            if (newId >= MAX_HEADERS) {
+                pthread_mutex_unlock(&headers_mutex);
+                free(headers);
+                return 0; // No available slots
+            }
         }
     }
+    
     headers->id = newId;
+    headers_storage[newId] = headers; // Store immediately while holding lock
     pthread_mutex_unlock(&headers_mutex);
     
     // Parse headers
@@ -87,6 +97,13 @@ JNIEXPORT jlong JNICALL Java_com_blyfast_nativeopt_NativeOptimizer_nativeParseHt
             
             // Extract name (trim trailing whitespace)
             size_t name_len = colon - line_start;
+            // Trim trailing whitespace from header name
+            while (name_len > 0 && (line_start[name_len - 1] == ' ' || line_start[name_len - 1] == '\t')) {
+                name_len--;
+            }
+            if (name_len > MAX_HEADER_NAME_LEN) {
+                name_len = MAX_HEADER_NAME_LEN;
+            }
             header->name = (char*)malloc(name_len + 1);
             if (!header->name) {
                 free(header);
@@ -128,18 +145,7 @@ JNIEXPORT jlong JNICALL Java_com_blyfast_nativeopt_NativeOptimizer_nativeParseHt
         pos = line_end;
     }
     
-    // Store headers in global storage with thread safety
-    pthread_mutex_lock(&headers_mutex);
-    if (headers->id < MAX_HEADERS) {
-        headers_storage[headers->id] = headers;
-    } else {
-        pthread_mutex_unlock(&headers_mutex);
-        freeHeadersList(headers->first);
-        free(headers);
-        return 0;
-    }
-    pthread_mutex_unlock(&headers_mutex);
-    
+    // Headers already stored during ID assignment
     return headers->id;
 }
 
@@ -157,37 +163,39 @@ JNIEXPORT jstring JNICALL Java_com_blyfast_nativeopt_NativeOptimizer_nativeGetHe
         return NULL;
     }
     
-    // Thread-safe access
+    // Thread-safe access - keep lock during access to prevent free
     pthread_mutex_lock(&headers_mutex);
     ParsedHeaders* headers = headers_storage[headersId];
     if (headers == NULL) {
         pthread_mutex_unlock(&headers_mutex);
         return NULL;
     }
-    pthread_mutex_unlock(&headers_mutex);
     
-    // Get the header name
+    // Get the header name while holding lock
     const char *nameStr = (*env)->GetStringUTFChars(env, headerName, NULL);
     if (nameStr == NULL) {
+        pthread_mutex_unlock(&headers_mutex);
         return NULL; // OutOfMemoryError
     }
     
     // Find the header
     HeaderValue* current = headers->first;
+    jstring result = NULL;
     
     while (current != NULL) {
         if (strcasecmp(current->name, nameStr) == 0) {
             // Found the header, return its value
-            jstring result = (*env)->NewStringUTF(env, current->value);
-            (*env)->ReleaseStringUTFChars(env, headerName, nameStr);
-            return result;
+            result = (*env)->NewStringUTF(env, current->value);
+            CHECK_JNI_EXCEPTION(env);
+            break;
         }
         current = current->next;
     }
     
-    // Header not found
+    pthread_mutex_unlock(&headers_mutex);
     (*env)->ReleaseStringUTFChars(env, headerName, nameStr);
-    return NULL;
+    
+    return result;
 }
 
 /**
@@ -208,9 +216,15 @@ JNIEXPORT void JNICALL Java_com_blyfast_nativeopt_NativeOptimizer_nativeFreeHead
         return;
     }
     headers_storage[headersId] = NULL;  // Clear slot first
+    
+    // Add slot back to free list if there's room (with bounds checking)
+    if (free_header_count < MAX_HEADERS) {
+        free_header_slots[free_header_count++] = (int)headersId;
+    }
+    
     pthread_mutex_unlock(&headers_mutex);
     
-    // Free header values
+    // Free header values (safe to do outside lock)
     freeHeadersList(headers->first);
     
     // Free headers structure
