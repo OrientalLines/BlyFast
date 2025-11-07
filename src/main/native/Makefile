@@ -30,7 +30,7 @@ endif
 
 # Targets
 TARGET = $(LIB_PREFIX)blyfastnative$(LIB_SUFFIX)
-SOURCES = blyfastnative.c
+SOURCES = blyfastnative.c utils.c json_parser.c http_headers.c form_parser.c
 RESOURCES_DIR = ../../resources/native
 
 all: $(TARGET)
