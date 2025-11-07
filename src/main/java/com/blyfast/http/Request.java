@@ -768,6 +768,9 @@ public class Request {
         this.exchange = exchange;
         this.body = null;
         this.jsonBody = null;
+        this.rawBodyBuffer = null;  // Reset to prevent memory leak
+        this.bodyLength = 0;        // Reset body length
+        this.bodyType = -1;         // Reset body type detection
         this.attributes.clear();
         this.pathParams.clear();
         this.parsedObjects.clear();

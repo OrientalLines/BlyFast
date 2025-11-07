@@ -10,11 +10,13 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import com.blyfast.nativeopt.NativeOptimizer;
 
 /**
@@ -35,8 +37,16 @@ public class Response {
     // Increased threshold for small responses
     private static final int SMALL_RESPONSE_THRESHOLD = 4096; // 4KB
 
-    // Fast cache for frequently used responses using a concurrent map with higher capacity
-    private static final Map<String, ByteBuffer> commonResponseCache = new ConcurrentHashMap<>(64);
+    // Fast cache for frequently used responses with size limit to prevent unbounded growth
+    private static final int RESPONSE_CACHE_SIZE = 500;
+    private static final Map<String, ByteBuffer> commonResponseCache = Collections.synchronizedMap(
+        new LinkedHashMap<String, ByteBuffer>(64, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<String, ByteBuffer> eldest) {
+                return size() > RESPONSE_CACHE_SIZE;
+            }
+        }
+    );
     
     // Flag to determine if native optimizations are available
     private static final boolean nativeOptimizationsAvailable;
@@ -299,6 +309,27 @@ public class Response {
         t.setDaemon(true);
         return t;
     });
+    
+    static {
+        // Register shutdown hook to properly clean up the executor service
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            cacheExecutor.shutdown();
+            try {
+                if (!cacheExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                    logger.warn("Cache executor did not terminate gracefully, forcing shutdown");
+                    cacheExecutor.shutdownNow();
+                    // Wait a bit more for forced shutdown
+                    if (!cacheExecutor.awaitTermination(2, TimeUnit.SECONDS)) {
+                        logger.error("Cache executor did not terminate after forced shutdown");
+                    }
+                }
+            } catch (InterruptedException e) {
+                logger.warn("Interrupted while shutting down cache executor", e);
+                cacheExecutor.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+        }, "response-cache-shutdown-hook"));
+    }
     
     /**
      * Caches a response string in the background to avoid blocking the response path.

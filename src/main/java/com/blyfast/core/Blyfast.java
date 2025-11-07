@@ -20,12 +20,13 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.LongAdder;
@@ -70,14 +71,17 @@ public class Blyfast {
     private boolean enableCircuitBreaker = false;
     private int circuitBreakerThreshold = 50; // Number of errors before tripping
     private long circuitBreakerResetTimeoutMs = 30000; // 30 seconds
+    private int circuitBreakerSuccessThreshold = 5; // Number of consecutive successes to close circuit
     
     // Circuit breaker state
     private final AtomicInteger errorCount = new AtomicInteger(0);
+    private final AtomicInteger successCount = new AtomicInteger(0); // Track consecutive successes
     private final AtomicBoolean circuitOpen = new AtomicBoolean(false);
-    private long circuitOpenTime = 0;
+    private volatile long circuitOpenTime = 0;
 
     // Flag to track if pool monitor is running
-    private boolean isPoolMonitorRunning = false;
+    private volatile boolean isPoolMonitorRunning = false;
+    private Thread poolMonitorThread = null;
 
     /**
      * Creates a new Blyfast application instance.
@@ -444,6 +448,18 @@ public class Blyfast {
     }
     
     /**
+     * Sets the number of consecutive successes required to close the circuit breaker
+     * after it has been opened.
+     * 
+     * @param threshold the number of consecutive successes (default: 5)
+     * @return this instance for method chaining
+     */
+    public Blyfast circuitBreakerSuccessThreshold(int threshold) {
+        this.circuitBreakerSuccessThreshold = Math.max(1, threshold);
+        return this;
+    }
+    
+    /**
      * Sets the reset timeout for the circuit breaker.
      * 
      * @param timeoutMs the time in milliseconds before attempting to reset the circuit
@@ -460,6 +476,7 @@ public class Blyfast {
     public void resetCircuitBreaker() {
         circuitOpen.set(false);
         errorCount.set(0);
+        successCount.set(0);
         logger.info("Circuit breaker manually reset");
     }
     
@@ -481,6 +498,7 @@ public class Blyfast {
                 // Try to reset circuit (half-open state)
                 if (circuitOpen.compareAndSet(true, false)) {
                     errorCount.set(0);
+                    successCount.set(0); // Reset success count when entering half-open
                     logger.info("Circuit reset after timeout period, entering half-open state");
                 }
                 return true; // Allow request to test if system has recovered
@@ -493,24 +511,67 @@ public class Blyfast {
     
     /**
      * Records a successful request for circuit breaker purposes.
+     * In half-open state, tracks consecutive successes to close the circuit.
      */
     private void recordSuccess() {
         if (enableCircuitBreaker) {
-            errorCount.set(0); // Reset error count on success
+            if (circuitOpen.get()) {
+                // Circuit is open, but we're testing (shouldn't happen due to checkCircuitBreaker)
+                // This is a safety check
+                return;
+            }
+            
+            // Reset error count on success
+            errorCount.set(0);
+            
+            // If we were in half-open state (circuit was recently opened), track successes
+            // Note: We check if circuitOpenTime is recent to detect half-open state
+            long now = System.currentTimeMillis();
+            if (circuitOpenTime > 0 && (now - circuitOpenTime) < circuitBreakerResetTimeoutMs * 2) {
+                int successes = successCount.incrementAndGet();
+                if (successes >= circuitBreakerSuccessThreshold) {
+                    // Enough consecutive successes, fully close the circuit
+                    circuitOpenTime = 0; // Reset to indicate circuit is fully closed
+                    successCount.set(0);
+                    logger.info("Circuit breaker closed after {} consecutive successes", successes);
+                }
+            } else {
+                // Circuit is fully closed, reset success count
+                successCount.set(0);
+            }
         }
     }
     
     /**
      * Records a failed request for circuit breaker purposes.
+     * In half-open state, immediately reopens the circuit.
      */
     private void recordFailure() {
-        if (enableCircuitBreaker && !circuitOpen.get()) {
-            int currentErrors = errorCount.incrementAndGet();
-            if (currentErrors >= circuitBreakerThreshold) {
-                // Trip the circuit
+        if (enableCircuitBreaker) {
+            // Reset success count on failure
+            successCount.set(0);
+            
+            // Check if we're in half-open state (testing after timeout)
+            long now = System.currentTimeMillis();
+            boolean wasHalfOpen = circuitOpenTime > 0 && 
+                                 (now - circuitOpenTime) < circuitBreakerResetTimeoutMs * 2 &&
+                                 !circuitOpen.get();
+            
+            if (wasHalfOpen) {
+                // Immediately reopen circuit if failure occurs in half-open state
                 if (circuitOpen.compareAndSet(false, true)) {
                     circuitOpenTime = System.currentTimeMillis();
-                    logger.warn("Circuit breaker tripped after {} consecutive errors", currentErrors);
+                    logger.warn("Circuit breaker reopened after failure in half-open state");
+                }
+            } else if (!circuitOpen.get()) {
+                // Circuit is closed, increment error count
+                int currentErrors = errorCount.incrementAndGet();
+                if (currentErrors >= circuitBreakerThreshold) {
+                    // Trip the circuit
+                    if (circuitOpen.compareAndSet(false, true)) {
+                        circuitOpenTime = System.currentTimeMillis();
+                        logger.warn("Circuit breaker tripped after {} consecutive errors", currentErrors);
+                    }
                 }
             }
         }
@@ -603,6 +664,17 @@ public class Blyfast {
             for (Plugin plugin : plugins) {
                 logger.info(LogUtil.info("Stopping plugin: " + ConsoleColors.CYAN_BOLD + plugin.getName() + ConsoleColors.RESET));
                 plugin.onStop(this);
+            }
+
+            // Stop pool monitoring thread if running
+            if (poolMonitorThread != null && poolMonitorThread.isAlive()) {
+                poolMonitorThread.interrupt();
+                try {
+                    poolMonitorThread.join(2000); // Wait up to 2 seconds for thread to stop
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    logger.warn("Interrupted while waiting for pool monitor thread to stop");
+                }
             }
 
             server.stop();
@@ -716,7 +788,16 @@ public class Blyfast {
         private static final String HEAD_METHOD = "HEAD";
         
         // Track frequently accessed routes for optimization
-        private final Map<String, Route> fastRouteCache = new ConcurrentHashMap<>();
+        // Use LRU cache with size limit to prevent unbounded growth
+        private static final int ROUTE_CACHE_SIZE = 1000;
+        private final Map<String, Route> fastRouteCache = Collections.synchronizedMap(
+            new LinkedHashMap<String, Route>(16, 0.75f, true) {
+                @Override
+                protected boolean removeEldestEntry(Map.Entry<String, Route> eldest) {
+                    return size() > ROUTE_CACHE_SIZE;
+                }
+            }
+        );
         private final AtomicInteger routeHits = new AtomicInteger(0);
         private final AtomicInteger routeMisses = new AtomicInteger(0);
         
@@ -1122,9 +1203,15 @@ public class Blyfast {
     }
     
     /**
-     * Sets the object pool size.
+     * Sets the target object pool size.
      * 
-     * @param size the pool size
+     * Note: This sets the target size for adaptive pool sizing, but does not
+     * immediately resize existing pools. ArrayBlockingQueue instances cannot be
+     * resized after creation. The actual pool size is determined when pools are
+     * created, and adaptive sizing adjusts the target for future pool resizing
+     * decisions (though actual resizing would require recreating the queues).
+     * 
+     * @param size the target pool size
      * @return this instance for method chaining
      */
     public Blyfast poolSize(int size) {
@@ -1142,7 +1229,7 @@ public class Blyfast {
             return;
         }
         
-        Thread monitorThread = new Thread(() -> {
+        poolMonitorThread = new Thread(() -> {
             isPoolMonitorRunning = true;
             try {
                 while (!Thread.currentThread().isInterrupted()) {
@@ -1164,13 +1251,19 @@ public class Blyfast {
             }
         }, "object-pool-monitor");
         
-        monitorThread.setDaemon(true);
-        monitorThread.start();
+        poolMonitorThread.setDaemon(true);
+        poolMonitorThread.start();
         logger.info("Started object pool monitoring thread");
     }
     
     /**
      * Checks if the object pools need to be resized based on miss rates.
+     * 
+     * Note: ArrayBlockingQueue instances cannot be resized after creation.
+     * This method updates the target pool size (currentPoolSize), which affects
+     * future pool creation decisions, but does not resize existing pools.
+     * Actual resizing would require recreating the queues, which is not implemented
+     * to avoid complexity and potential issues with objects already in pools.
      */
     private void checkPoolResizing() {
         if (!adaptivePoolSizing || !useObjectPooling) {
