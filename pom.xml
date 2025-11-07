@@ -231,7 +231,7 @@
                     </execution>
                 </executions>
             </plugin>
-            
+
             <!-- Add native resources to JAR -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
