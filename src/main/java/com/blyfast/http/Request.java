@@ -13,7 +13,6 @@ import java.nio.charset.StandardCharsets;
 import java.util.Deque;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import com.blyfast.nativeopt.NativeOptimizer;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -30,14 +29,27 @@ public class Request {
     // Shared ObjectMapper instance configured for performance
     private static final ObjectMapper MAPPER = new ObjectMapper();
     
-    // Cache for deserialization of frequently used types
-    private static final ConcurrentHashMap<Class<?>, Boolean> deserializationConfigured = new ConcurrentHashMap<>();
+    // Initialize ObjectMapper modules once at class loading time
+    static {
+        MAPPER.findAndRegisterModules();
+    }
 
     // Buffer size for reading request bodies
     private static final int BUFFER_SIZE = 8192;
     
     // Reusable ByteBuffer for reading request bodies
+    // Note: ThreadLocal values persist for the thread's lifetime. For long-running applications
+    // with many threads, consider periodically clearing ThreadLocal values or using a bounded pool.
     private static final ThreadLocal<ByteBuffer> bufferPool = ThreadLocal.withInitial(() -> ByteBuffer.allocateDirect(BUFFER_SIZE));
+    
+    /**
+     * Clears the ThreadLocal ByteBuffer for the current thread.
+     * This helps prevent memory leaks in long-running applications with many threads.
+     * Should be called when a thread is done processing requests.
+     */
+    public static void clearThreadLocalBuffer() {
+        bufferPool.remove();
+    }
 
     private HttpServerExchange exchange;
     private String body;
@@ -403,12 +415,8 @@ public class Request {
             }
         }
         
-        // Configure deserialization for this class only once
-        deserializationConfigured.computeIfAbsent(clazz, k -> {
-            // This block runs only once per class during the application's lifecycle
-            MAPPER.findAndRegisterModules(); // Optional: find modules in the classpath 
-            return true;
-        });
+        // ObjectMapper modules are already registered in static initializer
+        // No need to call findAndRegisterModules() per class
         
         T result = MAPPER.readValue(getBody(), clazz);
         parsedObjects.put(clazz.getName(), result);
@@ -760,6 +768,8 @@ public class Request {
     /**
      * Resets this request instance for reuse with a new exchange.
      * Used for object pooling to minimize garbage collection.
+     * Note: This does not clear ThreadLocal ByteBuffers. For long-running threads,
+     * consider calling Request.clearThreadLocalBuffer() periodically.
      *
      * @param exchange the new exchange to use
      * @return this instance for method chaining

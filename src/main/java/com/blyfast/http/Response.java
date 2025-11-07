@@ -10,13 +10,13 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.util.Collections;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import com.blyfast.nativeopt.NativeOptimizer;
 
 /**
@@ -39,14 +39,8 @@ public class Response {
 
     // Fast cache for frequently used responses with size limit to prevent unbounded growth
     private static final int RESPONSE_CACHE_SIZE = 500;
-    private static final Map<String, ByteBuffer> commonResponseCache = Collections.synchronizedMap(
-        new LinkedHashMap<String, ByteBuffer>(64, 0.75f, true) {
-            @Override
-            protected boolean removeEldestEntry(Map.Entry<String, ByteBuffer> eldest) {
-                return size() > RESPONSE_CACHE_SIZE;
-            }
-        }
-    );
+    private static final Map<String, ByteBuffer> commonResponseCache = new ConcurrentHashMap<>(64, 0.75f);
+    private static final AtomicInteger responseCacheSize = new AtomicInteger(0);
     
     // Flag to determine if native optimizations are available
     private static final boolean nativeOptimizationsAvailable;
@@ -87,16 +81,35 @@ public class Response {
     /**
      * Caches a common response string as a ByteBuffer for reuse.
      * Uses direct ByteBuffers for better performance.
+     * Thread-safe with manual size management.
      * 
      * @param response the response string to cache
      * @param duplicateBuffer whether to duplicate the buffer (true) or just slice it (false)
      */
     private static void cacheCommonResponse(String response, boolean duplicateBuffer) {
+        // Manual size management for thread-safe eviction
+        int currentSize = responseCacheSize.get();
+        if (currentSize >= RESPONSE_CACHE_SIZE) {
+            // Evict entries if cache is too large
+            if (commonResponseCache.size() > RESPONSE_CACHE_SIZE * 0.9) {
+                commonResponseCache.entrySet().removeIf(entry -> {
+                    if (commonResponseCache.size() > RESPONSE_CACHE_SIZE * 0.9) {
+                        responseCacheSize.decrementAndGet();
+                        return true;
+                    }
+                    return false;
+                });
+            }
+        }
+        
         if (nativeOptimizationsAvailable) {
             try {
                 // Use native optimization for string conversion
                 ByteBuffer buffer = NativeOptimizer.stringToDirectBytes(response);
-                commonResponseCache.put(response, duplicateBuffer ? buffer.duplicate() : buffer);
+                ByteBuffer existing = commonResponseCache.putIfAbsent(response, duplicateBuffer ? buffer.duplicate() : buffer);
+                if (existing == null) {
+                    responseCacheSize.incrementAndGet();
+                }
                 return;
             } catch (Exception e) {
                 // Fall back to Java implementation on error
@@ -109,7 +122,10 @@ public class Response {
         ByteBuffer buffer = ByteBuffer.allocateDirect(bytes.length);
         buffer.put(bytes);
         buffer.flip();
-        commonResponseCache.put(response, duplicateBuffer ? buffer.duplicate() : buffer);
+        ByteBuffer existing = commonResponseCache.putIfAbsent(response, duplicateBuffer ? buffer.duplicate() : buffer);
+        if (existing == null) {
+            responseCacheSize.incrementAndGet();
+        }
     }
 
     private HttpServerExchange exchange;
@@ -329,6 +345,30 @@ public class Response {
                 Thread.currentThread().interrupt();
             }
         }, "response-cache-shutdown-hook"));
+    }
+    
+    /**
+     * Shuts down the response cache executor service.
+     * Should be called during application shutdown to ensure proper cleanup.
+     */
+    public static void shutdownCacheExecutor() {
+        if (cacheExecutor != null && !cacheExecutor.isShutdown()) {
+            cacheExecutor.shutdown();
+            try {
+                if (!cacheExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                    logger.warn("Cache executor did not terminate gracefully, forcing shutdown");
+                    cacheExecutor.shutdownNow();
+                    // Wait a bit more for forced shutdown
+                    if (!cacheExecutor.awaitTermination(2, TimeUnit.SECONDS)) {
+                        logger.error("Cache executor did not terminate after forced shutdown");
+                    }
+                }
+            } catch (InterruptedException e) {
+                logger.warn("Interrupted while shutting down cache executor", e);
+                cacheExecutor.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+        }
     }
     
     /**

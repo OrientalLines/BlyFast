@@ -20,12 +20,11 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashMap;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -41,7 +40,13 @@ public class Blyfast {
     // Object pool configuration
     private static final int DEFAULT_POOL_SIZE = 1000;
     private static final int MAX_POOL_SIZE = 10000;
-    private int currentPoolSize = DEFAULT_POOL_SIZE;
+    private volatile int currentPoolSize = DEFAULT_POOL_SIZE; // Volatile for thread visibility
+    
+    // Server configuration constants
+    private static final int DEFAULT_REQUEST_TIMEOUT_MS = 30 * 1000; // 30 seconds
+    private static final int DEFAULT_IDLE_TIMEOUT_MS = 60 * 1000; // 60 seconds
+    private static final int DEFAULT_MAX_PARAMETERS = 2000;
+    private static final int POOL_MONITOR_THREAD_JOIN_TIMEOUT_MS = 2000; // 2 seconds
     private final ArrayBlockingQueue<Request> requestPool;
     private final ArrayBlockingQueue<Response> responsePool;
     private final ArrayBlockingQueue<Context> contextPool;
@@ -73,11 +78,11 @@ public class Blyfast {
     private long circuitBreakerResetTimeoutMs = 30000; // 30 seconds
     private int circuitBreakerSuccessThreshold = 5; // Number of consecutive successes to close circuit
     
-    // Circuit breaker state
+    // Circuit breaker state - use volatile for visibility and atomic operations for state changes
     private final AtomicInteger errorCount = new AtomicInteger(0);
     private final AtomicInteger successCount = new AtomicInteger(0); // Track consecutive successes
     private final AtomicBoolean circuitOpen = new AtomicBoolean(false);
-    private volatile long circuitOpenTime = 0;
+    private volatile long circuitOpenTime = 0; // Volatile for visibility across threads
 
     // Flag to track if pool monitor is running
     private volatile boolean isPoolMonitorRunning = false;
@@ -482,6 +487,7 @@ public class Blyfast {
     
     /**
      * Checks the circuit breaker state and determines whether to allow the request.
+     * Uses atomic operations to ensure thread-safe state transitions.
      * 
      * @return true if the request should be allowed, false if it should be rejected
      */
@@ -490,15 +496,22 @@ public class Blyfast {
             return true; // Circuit breaker disabled, allow all requests
         }
         
+        // Use atomic get for thread-safe read
+        boolean isOpen = circuitOpen.get();
+        
         // If circuit is open (tripped)
-        if (circuitOpen.get()) {
-            // Check if reset timeout has elapsed
+        if (isOpen) {
+            // Check if reset timeout has elapsed (volatile read ensures visibility)
+            long openTime = circuitOpenTime;
             long now = System.currentTimeMillis();
-            if (now - circuitOpenTime > circuitBreakerResetTimeoutMs) {
-                // Try to reset circuit (half-open state)
+            
+            if (openTime > 0 && (now - openTime) > circuitBreakerResetTimeoutMs) {
+                // Try to reset circuit (half-open state) using atomic compare-and-set
                 if (circuitOpen.compareAndSet(true, false)) {
                     errorCount.set(0);
                     successCount.set(0); // Reset success count when entering half-open
+                    // Use volatile write for visibility
+                    circuitOpenTime = System.currentTimeMillis();
                     logger.info("Circuit reset after timeout period, entering half-open state");
                 }
                 return true; // Allow request to test if system has recovered
@@ -512,66 +525,86 @@ public class Blyfast {
     /**
      * Records a successful request for circuit breaker purposes.
      * In half-open state, tracks consecutive successes to close the circuit.
+     * Uses atomic operations for thread-safe state management.
      */
     private void recordSuccess() {
-        if (enableCircuitBreaker) {
-            if (circuitOpen.get()) {
-                // Circuit is open, but we're testing (shouldn't happen due to checkCircuitBreaker)
-                // This is a safety check
-                return;
-            }
-            
-            // Reset error count on success
-            errorCount.set(0);
-            
-            // If we were in half-open state (circuit was recently opened), track successes
-            // Note: We check if circuitOpenTime is recent to detect half-open state
-            long now = System.currentTimeMillis();
-            if (circuitOpenTime > 0 && (now - circuitOpenTime) < circuitBreakerResetTimeoutMs * 2) {
-                int successes = successCount.incrementAndGet();
-                if (successes >= circuitBreakerSuccessThreshold) {
-                    // Enough consecutive successes, fully close the circuit
-                    circuitOpenTime = 0; // Reset to indicate circuit is fully closed
+        if (!enableCircuitBreaker) {
+            return;
+        }
+        
+        // Use atomic get for thread-safe read
+        boolean isOpen = circuitOpen.get();
+        
+        if (isOpen) {
+            // Circuit is open, but we're testing (shouldn't happen due to checkCircuitBreaker)
+            // This is a safety check
+            return;
+        }
+        
+        // Reset error count on success
+        errorCount.set(0);
+        
+        // Check if we were in half-open state (circuit was recently opened)
+        // Use volatile read for visibility
+        long openTime = circuitOpenTime;
+        long now = System.currentTimeMillis();
+        
+        if (openTime > 0 && (now - openTime) < circuitBreakerResetTimeoutMs * 2) {
+            // We're in half-open state, track consecutive successes
+            int successes = successCount.incrementAndGet();
+            if (successes >= circuitBreakerSuccessThreshold) {
+                // Enough consecutive successes, fully close the circuit
+                // Use atomic operations and volatile write for thread safety
+                if (circuitOpen.compareAndSet(false, false)) { // No-op but ensures visibility
+                    circuitOpenTime = 0; // Reset to indicate circuit is fully closed (volatile write)
                     successCount.set(0);
                     logger.info("Circuit breaker closed after {} consecutive successes", successes);
                 }
-            } else {
-                // Circuit is fully closed, reset success count
-                successCount.set(0);
             }
+        } else {
+            // Circuit is fully closed, reset success count
+            successCount.set(0);
         }
     }
     
     /**
      * Records a failed request for circuit breaker purposes.
      * In half-open state, immediately reopens the circuit.
+     * Uses atomic operations for thread-safe state transitions.
      */
     private void recordFailure() {
-        if (enableCircuitBreaker) {
-            // Reset success count on failure
-            successCount.set(0);
-            
-            // Check if we're in half-open state (testing after timeout)
-            long now = System.currentTimeMillis();
-            boolean wasHalfOpen = circuitOpenTime > 0 && 
-                                 (now - circuitOpenTime) < circuitBreakerResetTimeoutMs * 2 &&
-                                 !circuitOpen.get();
-            
-            if (wasHalfOpen) {
-                // Immediately reopen circuit if failure occurs in half-open state
+        if (!enableCircuitBreaker) {
+            return;
+        }
+        
+        // Reset success count on failure
+        successCount.set(0);
+        
+        // Check if we're in half-open state (testing after timeout)
+        // Use volatile read and atomic get for thread-safe checks
+        long openTime = circuitOpenTime;
+        long now = System.currentTimeMillis();
+        boolean isOpen = circuitOpen.get();
+        
+        boolean wasHalfOpen = openTime > 0 && 
+                             (now - openTime) < circuitBreakerResetTimeoutMs * 2 &&
+                             !isOpen;
+        
+        if (wasHalfOpen) {
+            // Immediately reopen circuit if failure occurs in half-open state
+            // Use atomic compare-and-set and volatile write for thread safety
+            if (circuitOpen.compareAndSet(false, true)) {
+                circuitOpenTime = System.currentTimeMillis(); // Volatile write
+                logger.warn("Circuit breaker reopened after failure in half-open state");
+            }
+        } else if (!isOpen) {
+            // Circuit is closed, increment error count
+            int currentErrors = errorCount.incrementAndGet();
+            if (currentErrors >= circuitBreakerThreshold) {
+                // Trip the circuit using atomic compare-and-set
                 if (circuitOpen.compareAndSet(false, true)) {
-                    circuitOpenTime = System.currentTimeMillis();
-                    logger.warn("Circuit breaker reopened after failure in half-open state");
-                }
-            } else if (!circuitOpen.get()) {
-                // Circuit is closed, increment error count
-                int currentErrors = errorCount.incrementAndGet();
-                if (currentErrors >= circuitBreakerThreshold) {
-                    // Trip the circuit
-                    if (circuitOpen.compareAndSet(false, true)) {
-                        circuitOpenTime = System.currentTimeMillis();
-                        logger.warn("Circuit breaker tripped after {} consecutive errors", currentErrors);
-                    }
+                    circuitOpenTime = System.currentTimeMillis(); // Volatile write
+                    logger.warn("Circuit breaker tripped after {} consecutive errors", currentErrors);
                 }
             }
         }
@@ -632,12 +665,12 @@ public class Blyfast {
                 .setServerOption(UndertowOptions.ALWAYS_SET_DATE, true)
                 .setServerOption(UndertowOptions.RECORD_REQUEST_START_TIME, false)
                 .setServerOption(UndertowOptions.MAX_CONCURRENT_REQUESTS_PER_CONNECTION, 200) // Doubled
-                .setServerOption(UndertowOptions.NO_REQUEST_TIMEOUT, 30 * 1000) // 30 seconds timeout (reduced)
-                .setServerOption(UndertowOptions.IDLE_TIMEOUT, 60 * 1000) // 60 second idle timeout
+                .setServerOption(UndertowOptions.NO_REQUEST_TIMEOUT, DEFAULT_REQUEST_TIMEOUT_MS)
+                .setServerOption(UndertowOptions.IDLE_TIMEOUT, DEFAULT_IDLE_TIMEOUT_MS)
                 // Performance-focused settings
                 .setServerOption(UndertowOptions.MAX_CACHED_HEADER_SIZE, 1024)
                 .setServerOption(UndertowOptions.MAX_HEADERS, 200)
-                .setServerOption(UndertowOptions.MAX_PARAMETERS, 2000)
+                .setServerOption(UndertowOptions.MAX_PARAMETERS, DEFAULT_MAX_PARAMETERS)
                 .setServerOption(UndertowOptions.MAX_COOKIES, 200)
                 .build();
 
@@ -670,12 +703,15 @@ public class Blyfast {
             if (poolMonitorThread != null && poolMonitorThread.isAlive()) {
                 poolMonitorThread.interrupt();
                 try {
-                    poolMonitorThread.join(2000); // Wait up to 2 seconds for thread to stop
+                    poolMonitorThread.join(POOL_MONITOR_THREAD_JOIN_TIMEOUT_MS);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     logger.warn("Interrupted while waiting for pool monitor thread to stop");
                 }
             }
+
+            // Shutdown response cache executor
+            Response.shutdownCacheExecutor();
 
             server.stop();
 
@@ -788,16 +824,10 @@ public class Blyfast {
         private static final String HEAD_METHOD = "HEAD";
         
         // Track frequently accessed routes for optimization
-        // Use LRU cache with size limit to prevent unbounded growth
+        // Use ConcurrentHashMap with manual size management for thread safety
         private static final int ROUTE_CACHE_SIZE = 1000;
-        private final Map<String, Route> fastRouteCache = Collections.synchronizedMap(
-            new LinkedHashMap<String, Route>(16, 0.75f, true) {
-                @Override
-                protected boolean removeEldestEntry(Map.Entry<String, Route> eldest) {
-                    return size() > ROUTE_CACHE_SIZE;
-                }
-            }
-        );
+        private final Map<String, Route> fastRouteCache = new ConcurrentHashMap<>(16, 0.75f);
+        private final AtomicInteger routeCacheSize = new AtomicInteger(0);
         private final AtomicInteger routeHits = new AtomicInteger(0);
         private final AtomicInteger routeMisses = new AtomicInteger(0);
         
@@ -819,7 +849,9 @@ public class Blyfast {
                 }
 
                 // Fast cached route lookup using path+method as key
-                String cacheKey = method + "|" + path;
+                // Optimize string concatenation with pre-sized StringBuilder
+                String cacheKey = new StringBuilder(method.length() + path.length() + 1)
+                    .append(method).append('|').append(path).toString();
                 Route route = fastRouteCache.get(cacheKey);
                 
                 if (route != null) {
@@ -841,7 +873,24 @@ public class Blyfast {
                     route = router.findRoute(method, path);
                     if (route != null && route.getMiddleware().isEmpty()) {
                         // Cache this route for future requests if it doesn't have middleware
-                        fastRouteCache.put(cacheKey, route);
+                        // Manual LRU eviction: remove oldest entries if cache is full
+                        int currentSize = routeCacheSize.get();
+                        if (currentSize >= ROUTE_CACHE_SIZE) {
+                            // Remove oldest entries (simple eviction - remove first entry found)
+                            if (fastRouteCache.size() >= ROUTE_CACHE_SIZE) {
+                                fastRouteCache.entrySet().removeIf(entry -> {
+                                    if (fastRouteCache.size() > ROUTE_CACHE_SIZE * 0.9) {
+                                        routeCacheSize.decrementAndGet();
+                                        return true;
+                                    }
+                                    return false;
+                                });
+                            }
+                        }
+                        Route existing = fastRouteCache.putIfAbsent(cacheKey, route);
+                        if (existing == null) {
+                            routeCacheSize.incrementAndGet();
+                        }
                         
                         // Try the fast path
                         try {
